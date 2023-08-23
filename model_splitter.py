@@ -9,50 +9,75 @@ SIZE_UNITS = ['B', "KB", "MB", "GB", "TB"]
 KiB = 1024
 
 
-class SmallClassifier(keras.Model):    
-    def __init__(self, name=None):
-        super().__init__(name=name)
-
-        self.dense_1 = layers.Dense(20, activation="relu")
-        self.dense_2 = layers.Dense(1, activation="sigmoid")
-        
-    def build(self, inp):
-        # Build constituent layers when model is built
-        self.dense_1(keras.Input(inp[1:]))
-        out_shape1 = keras.Input(self.dense_1.output_shape[1:])
-        self.dense_2(out_shape1)
-        
-    def call(self, x):
-        x = self.dense_1(x)
-        return self.dense_2(x)
-
-
-class LargeClassifier(keras.Model):    
-    def __init__(self, name=None):
-        super().__init__(name=name)
-
-        self.dense_1 = layers.Dense(40, activation="relu")
-        self.dense_2 = layers.Dense(40, activation="relu")
-        self.dense_3 = layers.Dense(40, activation="relu")
-        self.dense_4 = layers.Dense(20, activation="relu")
-        self.dense_5 = layers.Dense(20, activation="relu")
-        self.dense_6 = layers.Dense(1, activation="sigmoid")
-        
+class BaseModel(keras.Model):
     def build(self, inp):
         # Build constituent layers when model is built
         out_shape = inp
         for layer in self.layers:
             layer(keras.Input(out_shape[1:]))
             out_shape = layer.output_shape
+
+
+class SmallClassifier(BaseModel):    
+    def __init__(self, name=None):
+        super().__init__(name=name)
+
+        self.dense_1 = layers.Dense(20, activation="relu")
+        self.dense_2 = layers.Dense(1, activation="sigmoid")
         
     def call(self, x):
-        x1 = self.dense_1(x)
-        x2 = self.dense_2(x1)
-        x3 = self.dense_3(x2)
-        x4 = self.dense_4(x3)
-        x5 = self.dense_5(x4)
-        x6 = self.dense_6(x5)
-        return x6
+        x = self.dense_1(x)
+        return self.dense_2(x)
+
+
+class LargeClassifier(BaseModel):    
+    def __init__(self, name=None):
+        super().__init__(name=name)
+
+        self.encode = keras.Sequential(
+            [layers.Dense(40, activation="relu") for _ in range(3)]
+            + [layers.Dense(20, activation="relu")]
+        )
+        self.classify = SmallClassifier()
+        
+    def call(self, x):
+        encoding = self.encode(x)
+        return self.classify(encoding)
+
+
+def iter_layers(
+        model: keras.Model | keras.Sequential,
+        contains_layers=lambda layer: isinstance(
+            layer, keras.Model | keras.Sequential
+        )):
+    """
+    Yields sublayers in model
+
+    Parameters
+    ----------
+    model : keras.Model | keras.Sequential
+        Model with layers to iterate over
+    contains_layers : TYPE, optional
+        Used to check if layer contains sub layers that should be yielded
+        instead of the layer itself.
+        Can be set to lambda: False to
+        iterate over only the top-level layers of the model (model.layers).        
+        The default is
+        lambda layer: isinstance(layer, keras.Model | keras.Sequential).
+
+    Yields
+    ------
+    tf.Module
+        Specific type of yielded elements will depend on contains_layers
+        function (Will not yield Model or Sequential with default function).
+
+    """
+    
+    for layer in model.layers:
+        if contains_layers(layer):
+            yield from iter_layers(layer)
+            continue
+        yield layer
 
 
 def calc_model_size(model: keras.Model, units="KB"):
@@ -134,9 +159,10 @@ def split_by_num_segments(num_segments: int):
     """
     
     def splitter(model: keras.Model):
-        layers_per_segment = len(model.layers) // num_segments
+        all_model_layers = list(iter_layers(model))
+        layers_per_segment = len(all_model_layers) // num_segments
         assert layers_per_segment
-        remaining_layers = len(model.layers) % num_segments
+        remaining_layers = len(all_model_layers) % num_segments
         segments = [layers_per_segment for _ in range(num_segments)]
         segments[-1] += remaining_layers
         return segments
@@ -164,13 +190,14 @@ def split_by_size(target_max_size: int | float):
     def splitter(model: keras.Model):
         segment_lengths = []
         current_segment_layers = []
+        all_layers = list(iter_layers(model))
         
-        for i, layer in enumerate(model.layers):
+        for i, layer in enumerate(all_layers):
             current_segment_layers.append(layer)
             segment = model_wrap(current_segment_layers)
             segment_size = calc_model_size(segment, units="KB")
             
-            if segment_size >= target_max_size or i == len(model.layers) - 1:
+            if segment_size >= target_max_size or i == len(all_layers) - 1:
                 next_segment_layers = []
                 if (segment_size > target_max_size
                     and len(current_segment_layers) > 1):
@@ -180,7 +207,7 @@ def split_by_size(target_max_size: int | float):
                 
                 segment_lengths.append(len(current_segment_layers))
                 # Put remaing layer in segment of its own
-                if i == len(model.layers) - 1 and next_segment_layers:
+                if i == len(all_layers) - 1 and next_segment_layers:
                     segment_lengths.append(1)
                 current_segment_layers = next_segment_layers
         
@@ -238,7 +265,11 @@ def save_tinymlgen_model(model, file_name):
         file.write(c_code)
 
 
-def split_model(model: keras.Model, splitter=split_by_size(1), output_folder='', saver=save_tinymlgen_model):
+def split_model(
+        model: keras.Model,
+        splitter=split_by_size(1),
+        output_folder='',
+        saver=save_tinymlgen_model):
     """
     Splits model into segments derived from `splitter` and saves the segments
     Requires that all model layers are built (layer.built == True)
@@ -278,9 +309,10 @@ def split_model(model: keras.Model, splitter=split_by_size(1), output_folder='',
     os.makedirs(save_root, exist_ok=True)
     
     segments = []
+    all_model_layers = list(iter_layers(model)) 
     for i in range(len(segment_indicies)):
         start, end = segment_indicies[i]
-        segment_layers = model.layers[start:end]
+        segment_layers = all_model_layers[start:end]
         segment = model_wrap(segment_layers)        
         
         file_name = os.path.join(save_root, f"{model.name}_{i}")
