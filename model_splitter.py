@@ -27,6 +27,34 @@ class SmallClassifier(keras.Model):
         return self.dense_2(x)
 
 
+class LargeClassifier(keras.Model):    
+    def __init__(self, name=None):
+        super().__init__(name=name)
+
+        self.dense_1 = layers.Dense(40, activation="relu")
+        self.dense_2 = layers.Dense(40, activation="relu")
+        self.dense_3 = layers.Dense(40, activation="relu")
+        self.dense_4 = layers.Dense(20, activation="relu")
+        self.dense_5 = layers.Dense(20, activation="relu")
+        self.dense_6 = layers.Dense(1, activation="sigmoid")
+        
+    def build(self, inp):
+        # Build constituent layers when model is built
+        out_shape = inp
+        for layer in self.layers:
+            layer(keras.Input(out_shape[1:]))
+            out_shape = layer.output_shape
+        
+    def call(self, x):
+        x1 = self.dense_1(x)
+        x2 = self.dense_2(x1)
+        x3 = self.dense_3(x2)
+        x4 = self.dense_4(x3)
+        x5 = self.dense_5(x4)
+        x6 = self.dense_6(x5)
+        return x6
+
+
 def calc_model_size(model: keras.Model, units="KB"):
     """
     Calculcate size of a keras.Model
@@ -149,7 +177,7 @@ def split_by_size(target_max_size: int | float):
                     # Move last layer in segment to next segment if segment too large
                     last_added_layer = current_segment_layers.pop(-1)
                     next_segment_layers.append(last_added_layer)
-                    
+                
                 segment_lengths.append(len(current_segment_layers))
                 # Put remaing layer in segment of its own
                 if i == len(model.layers) - 1 and next_segment_layers:
@@ -214,6 +242,8 @@ def split_model(model: keras.Model, splitter=split_by_size(1), output_folder='',
     """
     Splits model into segments derived from `splitter` and saves the segments
     Requires that all model layers are built (layer.built == True)
+    
+    # TODO recursive splitting of child sequentials and models
 
     Parameters
     ----------
@@ -261,7 +291,11 @@ def split_model(model: keras.Model, splitter=split_by_size(1), output_folder='',
 
 
 if __name__ == "__main__":
-    classifier = SmallClassifier()
+    small_classifier = SmallClassifier()
     # initialize model with input
-    classifier(keras.Input((1, 30)))
-    split_model(classifier)
+    small_classifier(keras.Input((1, 30)))
+    split_model(small_classifier)
+    
+    large_classifier = LargeClassifier()
+    large_classifier(keras.Input((1, 50)))    
+    split_model(large_classifier, split_by_size(13))
