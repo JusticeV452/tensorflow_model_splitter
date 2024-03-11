@@ -7,6 +7,7 @@ from tensorflow.keras import layers
 
 SIZE_UNITS = ['B', "KB", "MB", "GB", "TB"]
 KiB = 1024
+DEFAULT_OUTPUT_FOLDER = "outputs"
 
 
 class BaseModel(keras.Model):
@@ -240,7 +241,7 @@ def save_tflite_model(model, file_name):
 
     # Save the model.
     with open(file_name + ".tflite", 'wb') as file:
-      file.write(tflite_model)
+        file.write(tflite_model)
 
 
 def save_tinymlgen_model(model, file_name):
@@ -269,7 +270,7 @@ def save_tinymlgen_model(model, file_name):
 def split_model(
         model: keras.Model,
         splitter=split_by_size(1),
-        output_folder='',
+        output_folder=DEFAULT_OUTPUT_FOLDER,
         saver=save_tinymlgen_model):
     """
     Splits model into segments derived from `splitter` and saves the segments
