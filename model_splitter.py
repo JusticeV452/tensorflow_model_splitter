@@ -18,9 +18,7 @@ class BaseModel(keras.Model):
             out_shape = layer.output_shape
 
 
-class SmallClassifier(BaseModel):    
-    def __init__(self, name=None):
-        super().__init__(name=name)
+class SmallClassifier(BaseModel):
 
         self.dense_1 = layers.Dense(20, activation="relu")
         self.dense_2 = layers.Dense(1, activation="sigmoid")
@@ -30,13 +28,11 @@ class SmallClassifier(BaseModel):
         return self.dense_2(x)
 
 
-class LargeClassifier(BaseModel):    
-    def __init__(self, name=None):
+class LargeClassifier(BaseModel):
+    def __init__(self, name=None, enc_in_size=40, enc_out_size=20):
         super().__init__(name=name)
 
         self.encode = keras.Sequential(
-            [layers.Dense(40, activation="relu") for _ in range(3)]
-            + [layers.Dense(20, activation="relu")]
         )
         self.classify = SmallClassifier()
         
