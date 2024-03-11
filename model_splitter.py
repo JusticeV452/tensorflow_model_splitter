@@ -18,25 +18,25 @@ class BaseModel(keras.Model):
             out_shape = layer.output_shape
 
 
-class SmallClassifier(BaseModel):    
-    def __init__(self, name=None):
-        super().__init__(name=name)
+class SmallClassifier(BaseModel):
+    def __init__(self, name=None, inp_size=20, output_activation="sigmoid", *args, **kwargs):
+        super().__init__(name=name, *args, **kwargs)
 
-        self.dense_1 = layers.Dense(20, activation="relu")
-        self.dense_2 = layers.Dense(1, activation="sigmoid")
+        self.dense_1 = layers.Dense(inp_size, activation="relu", dtype=kwargs.get("dtype", tf.float32))
+        self.dense_2 = layers.Dense(1, activation=output_activation, dtype=kwargs.get("dtype", tf.float32))
         
     def call(self, x):
         x = self.dense_1(x)
         return self.dense_2(x)
 
 
-class LargeClassifier(BaseModel):    
-    def __init__(self, name=None):
+class LargeClassifier(BaseModel):
+    def __init__(self, name=None, enc_in_size=40, enc_out_size=20):
         super().__init__(name=name)
 
         self.encode = keras.Sequential(
-            [layers.Dense(40, activation="relu") for _ in range(3)]
-            + [layers.Dense(20, activation="relu")]
+            [layers.Dense(enc_in_size, activation="relu") for _ in range(3)]
+            + [layers.Dense(enc_out_size, activation="relu")]
         )
         self.classify = SmallClassifier()
         
@@ -137,6 +137,7 @@ def model_wrap(module: tf.Module | list | tuple):
     outputs = module(inputs)
     model = keras.Model(inputs=inputs, outputs=outputs)
     return model
+
 
 def split_by_num_segments(num_segments: int):
     """
