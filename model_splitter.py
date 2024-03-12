@@ -324,6 +324,13 @@ def split_model(
     return segments
 
 
+def tiny_model_func(shape):
+    inputs = keras.Input(shape=shape)
+    x = layers.Dense(10)(inputs)
+    x = layers.ReLU()(x)
+    x = layers.Dense(1)(x)
+    return keras.Model(inputs=inputs, outputs=x)
+
 if __name__ == "__main__":
     small_classifier = SmallClassifier()
     # initialize model with input
