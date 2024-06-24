@@ -324,11 +324,11 @@ def split_model(
     return segments
 
 
-def tiny_model_func(shape):
-    inputs = keras.Input(shape=shape)
+def tiny_model_func(input_shape, num_outputs=1):
+    inputs = keras.Input(shape=input_shape)
     x = layers.Dense(10)(inputs)
     x = layers.ReLU()(x)
-    x = layers.Dense(1)(x)
+    x = layers.Dense(num_outputs)(x)
     return keras.Model(inputs=inputs, outputs=x)
 
 if __name__ == "__main__":
