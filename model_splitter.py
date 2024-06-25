@@ -10,6 +10,8 @@ from typing import Callable, List
 from tinymlgen import port as get_c_code
 from tensorflow.keras import layers
 
+from nnom.scripts.nnom_utils import generate_model
+
 SIZE_UNITS = ['B', "KB", "MB", "GB", "TB"]
 KiB = 1024
 DEFAULT_OUTPUT_FOLDER = "outputs"
@@ -343,11 +345,23 @@ def save_tinymlgen_model(model, file_name):
         file.write(c_code)
 
 
+def save_nnom_model(model, file_path, num_samples=1000):
+    # TODO: Adapt to accept representative dataset other than random
+    parent, file_name = os.path.split(file_path)
+    nnom_path = os.path.join(parent, "nnom")
+    os.makedirs(nnom_path, exist_ok=True)
+    generate_model(
+        model,
+        np.random.rand(num_samples, *model.input_shape[1:]),
+        name=os.path.join(nnom_path, f"{file_name}.h")
+    )
+
+
 def split_model(
         model: keras.Model,
-        splitter=split_by_size(1),
+        splitter: int | Callable[..., List[int]],
         output_folder=DEFAULT_OUTPUT_FOLDER,
-        saver=save_tinymlgen_model):
+        saver=None):
     """
     Splits model into segments derived from `splitter` and saves the segments
     Requires that all model layers are built (layer.built == True)
@@ -374,6 +388,9 @@ def split_model(
 
     """
 
+    if type(splitter) is int:
+        splitter = split_by_num_segments(splitter)
+
     segment_sizes = splitter(model)
 
     segment_indicies = [
@@ -381,8 +398,9 @@ def split_model(
         for i in range(len(segment_sizes))
     ]
 
-    save_root = os.path.join(output_folder, model.name)
-    os.makedirs(save_root, exist_ok=True)
+    if saver:
+        save_root = os.path.join(output_folder, model.name)
+        os.makedirs(save_root, exist_ok=True)
 
     segments = []
     all_model_layers = list(iter_layers(model))
@@ -391,9 +409,16 @@ def split_model(
         segment_layers = all_model_layers[start:end]
         segment = model_wrap(segment_layers)
 
-        file_name = os.path.join(save_root, f"{model.name}_{i}")
-        saver(segment, file_name)
+        if saver:
+            file_name = os.path.join(save_root, f"{model.name}_{i}")
+            saver(segment, file_name)
         segments.append(segment)
+
+    test_input = np.random.rand(1, *segments[0].input_shape[1:])
+    if not check_split(model, segments, test_input):
+        raise Exception(
+            f"Result of split model on {test_input} does not match model."
+        )
 
     return segments
 
@@ -409,7 +434,7 @@ if __name__ == "__main__":
     small_classifier = SmallClassifier()
     # initialize model with input
     small_classifier(keras.Input((1, 30)))
-    split_model(small_classifier)
+    split_model(small_classifier, 2)
 
     large_classifier = LargeClassifier()
     large_classifier(keras.Input((1, 50)))
