@@ -1,4 +1,6 @@
+inquirer
+matplotlib
+pyduinocli
+scikit-learn
 tensorflow==2.14.0
 tinymlgen
-matplotlib
-scikit-learn

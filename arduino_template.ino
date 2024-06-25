@@ -3,14 +3,15 @@
 // #include <SoftwareSerial.h>
 #include <HardwareSerial.h>
 
-#define MY_STM32C0116_DK
-int DEVICE_ID = 0;
+{{DEVICE_NAME_DEF}}
+int DEVICE_ID = {{DEVICE_ID}};
 
-int ROOT_ID = 0;
+int ROOT_ID = {{ROOT_ID}};
+int TAIL_ID = {{TAIL_ID}};
 int MAX_WRITE_AVAILABLE = 63;
 
 int BUTTON_PIN = PA8;
-#ifdef MY_STM32C0116_DK
+#ifdef STM32C0116_DK
   int COMM_RX_PIN = PA3;
   int COMM_TX_PIN = PA2;
   HardwareSerial COMM(COMM_RX_PIN, COMM_TX_PIN);
@@ -60,7 +61,7 @@ void printData(int8_t* data, int data_length) {
 }
 
 void setup() {
-  #ifdef MY_STM32C0116_DK
+  #ifdef STM32C0116_DK
     const int _RX = PA10_R;
     const int _TX = PA9_R;
     Serial.setRx(_RX);
@@ -74,7 +75,7 @@ void setup() {
   COMM.begin(115200);
 
 	model = nnom_model_create();
-  randomizeInput(0, 100);
+  randomizeInput(0, 128);
   inputReady = DEVICE_ID == ROOT_ID;
   outputReady = true;
   loopTimer = millis();
@@ -82,8 +83,8 @@ void setup() {
 
 void loop() {
   if (millis() - loopTimer >= LOOP_PERIOD_MS) {
-    if (!digitalRead(BUTTON_PIN)) {
-      randomizeInput(0, 100);
+    if (DEVICE_ID == ROOT_ID && !digitalRead(BUTTON_PIN)) {
+      randomizeInput(0, 128);
       inputReady = true;
     }
     
@@ -92,17 +93,26 @@ void loop() {
       Serial.printf("[DEVICE: %d, LOOP: %d] Input: ", DEVICE_ID, loops);
       printData(nnom_input_data, INPUT_LENGTH);
       model_run(model);
-      Serial.printf("[DEVICE: %d, LOOP: %d] Output: ", DEVICE_ID, loops);
+      Serial.printf(
+        "[DEVICE: %d, LOOP: %d] %sOutput: ",
+        DEVICE_ID, loops, DEVICE_ID == TAIL_ID ? "Final " : ""
+      );
       printData(nnom_output_data, OUTPUT_LENGTH);
       sendData(nnom_output_data, OUTPUT_LENGTH);
       inputReady = false;
       outputReady = false;
     }
 
-    inputReady = COMM.available() == INPUT_LENGTH;
+    if (DEVICE_ID == ROOT_ID && COMM.available()) {
+      randomizeInput(0, 128);
+      inputReady = true;
+    } else {
+      inputReady = COMM.available() == INPUT_LENGTH;
+    }
+
     // TODO: allow filling buffer with more than 1 outputs
     outputReady = COMM.availableForWrite() >= MAX_WRITE_AVAILABLE;
-    if (inputReady) {
+    if (inputReady && DEVICE_ID != ROOT_ID) {
       Serial.printf("[DEVICE: %d, LOOP: %d]  Input ready.\n", DEVICE_ID, loops);
       readData(nnom_input_data, INPUT_LENGTH);
     }
@@ -111,7 +121,7 @@ void loop() {
     loops++;
   }
 
-  if (DEVICE_ID == ROOT_ID && Serial.available() > 0) {
+  if (Serial.available() > 0) {
     Serial.println(Serial.readString());
   }
 }
