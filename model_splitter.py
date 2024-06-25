@@ -1,6 +1,11 @@
 import os
+import copy
+import warnings
+import numpy as np
 import tensorflow as tf
 import tensorflow.keras as keras
+
+from typing import Callable, List
 
 from tinymlgen import port as get_c_code
 from tensorflow.keras import layers
@@ -10,13 +15,42 @@ KiB = 1024
 DEFAULT_OUTPUT_FOLDER = "outputs"
 
 
+def clone_layer(layer, seed=1337):
+    # https://www.tensorflow.org/api_docs/python/tf/keras/models/clone_model
+    config = layer.get_config()
+    if seed is not None and "seed" in config:
+        config["seed"] = seed
+    new_layer = layer.__class__.from_config(config)
+    # if hasattr(layer, "weights"):
+    #     new_layer.set_weights(copy.deepcopy(layer.weights))
+    return new_layer
+
+
+def is_input_layer(layer):
+    return "input" in layer.name
+
+
+def check_split(model, segments, inp):
+    expected = model(inp).numpy()
+    segments_result = inp
+    for segment in segments:
+        segments_result = segment(segments_result)
+    return np.array_equal(expected, segments_result)
+
+
 class BaseModel(keras.Model):
-    def build(self, inp):
+    def build(self, inp_shape):
         # Build constituent layers when model is built
-        out_shape = inp
+        inputs = keras.Input(inp_shape[1:])
+        outputs = inputs
         for layer in self.layers:
-            layer(keras.Input(out_shape[1:]))
-            out_shape = layer.output_shape
+            outputs = layer(outputs)
+    def to_functional(self, inp):
+        # inputs = keras.Input(shape=input_shape)
+        outputs = inp
+        for layer in iter_layers(self):
+            outputs = layer(outputs)
+        return keras.Model(name=self.name, inputs=inp, outputs=outputs)
 
 
 class SmallClassifier(BaseModel):
@@ -103,14 +137,14 @@ def calc_model_size(model: keras.Model, units="KB"):
     return sum(p.size * p.itemsize for p in model.get_weights()) / div
 
 
-def model_wrap(module: tf.Module | list | tuple):
+def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
     """
-    Wrap a tf.Module in keras.Model for saving with tinymlgen.port or
+    Wrap tf.Modules in keras.Model for saving with tinymlgen.port or
     tf.lite.TFLiteConverter.from_keras_model
 
     Parameters
     ----------
-    module : tf.Module | list | tuple
+    layers : tf.Module | list | tuple
         module or iterable of modules to wrap in a keras Model.
         If module is iterable, it must contain at least 1 module
         Requires that the module is built (module.built == True)
@@ -123,20 +157,35 @@ def model_wrap(module: tf.Module | list | tuple):
 
     """
 
-    if type(module) in [list, tuple] and len(module) > 1:
-        # Build sequential
-        layers = module
-        module = keras.Sequential(layers)
-        module_inp = keras.Input(layers[0].input_shape[1:])
-        module(module_inp)
-    elif type(module) in [list, tuple]:
-        # List of 1 element can be treated as module
-        module = module[0]
+    if isinstance(layers, tf.Module):
+        layers = [layers]
 
-    # Create model with output of module(input)
-    inputs = keras.Input(module.input_shape[1:])
-    outputs = module(inputs)
+    # Build inputs
+    inp_shape = layers[0].input_shape
+    if is_input_layer(layers[0]):  # Ignore input layer
+        inp_shape = inp_shape[0]
+        layers = layers[1:]
+    if not suppress_warnings and not layers:
+        warnings.warn("Wrapping single Input layer: pointless wrap", RuntimeWarning)
+    inputs = keras.Input(inp_shape[1:])
+
+    # Build outputs
+    outputs = inputs
+    for layer in layers:
+        # Copy layers to avoid disconnected graph error
+        outputs = clone_layer(layer)(outputs)
+
     model = keras.Model(inputs=inputs, outputs=outputs)
+
+    # Copy weights from original layers to new model
+    num_model_layers = len(model.layers) - 1  # Model layers - input layer
+    num_inp_layers = len(layers)
+    assert num_model_layers == num_inp_layers, f"{num_model_layers} != {num_inp_layers}"
+    for i, layer in enumerate(layers):
+        if not hasattr(layer, "weights"):
+            continue
+        model.layers[i + 1].set_weights(layer.weights)
+
     return model
 
 
@@ -164,9 +213,23 @@ def split_by_num_segments(num_segments: int):
         all_model_layers = list(iter_layers(model))
         layers_per_segment = len(all_model_layers) // num_segments
         assert layers_per_segment
-        remaining_layers = len(all_model_layers) % num_segments
-        segments = [layers_per_segment for _ in range(num_segments)]
-        segments[-1] += remaining_layers
+        segments = [0]
+        i = 0
+        while i < len(all_model_layers):
+            segment_completion = 0
+            while (
+                segment_completion != layers_per_segment
+                and i < len(all_model_layers)
+            ):
+                # Input layers do not count torward segment completion
+                segment_completion += int(
+                    not is_input_layer(all_model_layers[i])
+                )
+                segments[-1] += 1
+                i += 1
+            segments.append(0)
+        if segments[-1] == 0:
+            segments.pop(-1)
         return segments
 
     return splitter
@@ -189,6 +252,9 @@ def split_by_size(target_max_size: int | float):
 
     """
 
+    def contains_input_layer(layers):
+        return len(list(filter(lambda l: is_input_layer(l), layers))) > 0
+
     def splitter(model: keras.Model):
         segment_lengths = []
         current_segment_layers = []
@@ -196,13 +262,21 @@ def split_by_size(target_max_size: int | float):
 
         for i, layer in enumerate(all_layers):
             current_segment_layers.append(layer)
+            if len(current_segment_layers) == 1 and is_input_layer(layer):
+                continue
             segment = model_wrap(current_segment_layers)
             segment_size = calc_model_size(segment, units="KB")
 
             if segment_size >= target_max_size or i == len(all_layers) - 1:
                 next_segment_layers = []
-                if (segment_size > target_max_size
-                    and len(current_segment_layers) > 1):
+                if (
+                    segment_size > target_max_size
+                    and len(current_segment_layers) > 1
+                    and not (
+                        len(current_segment_layers) == 2
+                        and contains_input_layer(current_segment_layers)
+                    )
+                ):
                     # Move last layer in segment to next segment if segment too large
                     last_added_layer = current_segment_layers.pop(-1)
                     next_segment_layers.append(last_added_layer)
@@ -275,8 +349,6 @@ def split_model(
     """
     Splits model into segments derived from `splitter` and saves the segments
     Requires that all model layers are built (layer.built == True)
-
-    # TODO recursive splitting of child sequentials and models
 
     Parameters
     ----------
