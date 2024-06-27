@@ -85,8 +85,7 @@ def get_model(python_file_path, model_creator_func, *args, **kwargs):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog='Model Distributer',
-        description='What the program does',
-        epilog='Text at the bottom of help'
+        description='Splits a model into parts based on the number of devices selected'
     )
     parser.add_argument('-ppth', '--project_path', type=str, default=DEFAULT_PROJECT_PATH)
     parser.add_argument('-m', '--module_path', type=str, default="models.py")
@@ -105,12 +104,18 @@ if __name__ == "__main__":
     os.makedirs(project_path, exist_ok=True)
 
     # Copy nnom library to project
-    shutil.copytree(os.path.join(NNOM_DIR, "port"), project_path, dirs_exist_ok=True)
-    shutil.copytree(os.path.join(NNOM_DIR, "inc"), project_path, dirs_exist_ok=True)
-    shutil.copytree(
-        os.path.join(NNOM_DIR, "src"), os.path.join(project_path, "src"),
-        dirs_exist_ok=True
-    )
+    nnom_port_dir = os.path.join(NNOM_DIR, "port")
+    nnom_inc_dir = os.path.join(NNOM_DIR, "inc")
+    nnom_src_dir = os.path.join(NNOM_DIR, "src")
+    if not os.path.exists(nnom_port_dir):
+        shutil.copytree(nnom_port_dir, project_path, dirs_exist_ok=True)
+    if not os.path.exists(nnom_inc_dir):
+        shutil.copytree(nnom_inc_dir, project_path, dirs_exist_ok=True)
+    if not os.path.exists(nnom_src_dir):
+        shutil.copytree(
+            nnom_src_dir, os.path.join(project_path, "src"),
+            dirs_exist_ok=True
+        )
     _, project_name = os.path.split(project_path)
     ino_path = os.path.join(project_path, f"{project_name}.ino")
 
