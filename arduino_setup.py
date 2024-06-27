@@ -199,7 +199,13 @@ if __name__ == "__main__":
         with open(ino_path, 'w+', encoding="utf-8") as file:
             file.write(content)
 
-        arduino.compile(project_path, fqbn=board.get("fqbn"))
+        try:
+            arduino.compile(project_path, fqbn=board.get("fqbn"))
+        except pyduinocli.errors.arduinoerror.ArduinoError as arduino_error:
+            error_vars = vars(arduino_error)
+            error_str = json.loads(error_vars["result"]["__stdout"])["compiler_err"]
+            print(error_str)
+            sys.exit(1)
 
         # arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:samd:mkr1000 MyFirstSketch
         print(board["address"])
