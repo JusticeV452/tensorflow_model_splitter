@@ -44,6 +44,11 @@ def make_board_options(board_list_results):
         board_props = board.pop("properties")
         board.update(board_props)
         display_str = board["address"] + f" (vid: {board['vid']}, pid: {board['pid']})".lower()
+        if "matching_boards" in result:
+            first_matching = result["matching_boards"][0]
+            board["fqbn"] = first_matching["fqbn"]
+            board["name"] = first_matching["name"]
+            display_str = board["name"] + " - " + display_str
         board["display_name"] = display_str
         board["save_key"] = f"{board.get('vid')}-{board.get('pid')}".lower()
         board_options[display_str] = board
