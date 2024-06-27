@@ -215,15 +215,18 @@ def split_by_num_segments(num_segments: int):
 
     def splitter(model: keras.Model):
         all_model_layers = list(iter_layers(model))
-        layers_per_segment = len(all_model_layers) // num_segments
-        assert layers_per_segment
+        num_layers = len(all_model_layers)
+        layers_per_segment = num_layers / num_segments
+        assert layers_per_segment >= 1, f"Not enough layers for {num_segments} segements"
+        target_segment_len = round(layers_per_segment)
         segments = [0]
+
         i = 0
-        while i < len(all_model_layers):
+        while i < num_layers:
             segment_completion = 0
             while (
-                segment_completion != layers_per_segment
-                and i < len(all_model_layers)
+                segment_completion != target_segment_len
+                and i < num_layers
             ):
                 # Input layers do not count torward segment completion
                 segment_completion += int(
@@ -231,9 +234,15 @@ def split_by_num_segments(num_segments: int):
                 )
                 segments[-1] += 1
                 i += 1
-            segments.append(0)
-        if segments[-1] == 0:
-            segments.pop(-1)
+            if len(segments) < num_segments:
+                segments.append(0)
+
+        # Redistribute layers
+        j = num_segments - 1
+        while j > 0 and segments[j] < 1:
+            segments[j - 1] -= 1
+            segments[j] += 1
+            j -= 1
         return segments
 
     return splitter
