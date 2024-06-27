@@ -104,6 +104,10 @@ void loop() {
     }
 
     if (DEVICE_ID == ROOT_ID && COMM.available()) {
+      Serial.println("ROOT got:");
+      readData(nnom_input_data, INPUT_LENGTH);
+      printData(nnom_input_data, INPUT_LENGTH);
+      Serial.println("Generating next input...");
       randomizeInput(0, 128);
       inputReady = true;
     } else {
@@ -113,7 +117,7 @@ void loop() {
     // TODO: allow filling buffer with more than 1 outputs
     outputReady = COMM.availableForWrite() >= MAX_WRITE_AVAILABLE;
     if (inputReady && DEVICE_ID != ROOT_ID) {
-      Serial.printf("[DEVICE: %d, LOOP: %d]  Input ready.\n", DEVICE_ID, loops);
+      Serial.printf("[DEVICE: %d, LOOP: %d] Input ready.\n", DEVICE_ID, loops);
       readData(nnom_input_data, INPUT_LENGTH);
     }
 
