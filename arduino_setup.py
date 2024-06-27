@@ -50,6 +50,17 @@ def make_board_options(board_list_results):
     return board_options
 
 
+def find_board(boards, _allow_missing=False, **kwargs):
+    for board in boards:
+        if all(val == board[key] for key, val in kwargs.items()):
+            return board
+    if not _allow_missing:
+        attr_str = ", ".join([
+            f"{key}={json.dumps(val)}" for key, val in kwargs.items()
+        ])
+        raise Exception(f"No board found with {attr_str}")
+
+
 def load_py_file(module_name, python_file_path):
     spec = importlib.util.spec_from_file_location(
         module_name, python_file_path
@@ -82,6 +93,7 @@ if __name__ == "__main__":
     parser.add_argument('-rid', '--root_id', type=int, default=0)
     parser.add_argument('-tid', '--tail_id', type=int)
     parser.add_argument('-sd', '--start_device', type=int, default=0)
+    parser.add_argument('-p', '--ports', type=str, nargs='*')
     args = parser.parse_args()
 
     project_path = args.project_path
@@ -106,12 +118,19 @@ if __name__ == "__main__":
 
     board_list = arduino.board.list()
     board_options = make_board_options(board_list)
-    answer = inquirer.prompt([inquirer.Checkbox(
-        "board_targets",
-        message="Select boards to split model over",
-        choices=board_options,
-    )])
-    target_boards = [board_options[choice] for choice in answer["board_targets"]]
+    if args.ports:
+        target_boards = [
+            find_board(board_options.values(), address=port)
+            for port in args.ports
+        ]
+    else:
+        chosen_boards = inquirer.prompt([inquirer.Checkbox(
+            "board_targets",
+            message="Select boards to split model over",
+            choices=board_options,
+        )])["board_targets"]
+        target_boards = [board_options[choice] for choice in chosen_boards]
+    assert target_boards, "No boards selected."
 
     # Validate board fqbns
     temp_fqbns = {}
@@ -144,7 +163,8 @@ if __name__ == "__main__":
         model._name = args.model_name
 
     # Split model with nnom
-    split_model(model, len(target_boards), saver=save_nnom_model)
+    num_segements = len(target_boards) if not args.tail_id else args.tail_id + 1
+    split_model(model, num_segements, saver=save_nnom_model)
 
     # copy each weight set into project dir and run
     for i, board in enumerate(target_boards):
