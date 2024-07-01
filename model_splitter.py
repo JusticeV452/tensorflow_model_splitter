@@ -366,15 +366,19 @@ def save_nnom_model(model, file_path, num_samples=1000):
     )
 
 
-def addr(obj):
+def addr(obj: object):
     return hex(id(obj))
+
+
+def get_prev_layer(keras_tensor):
+    return keras_tensor._keras_history.layer
 
 
 def segment_branching_model(model: keras.Model):
     blocks = []
     nodes = {}
     seen = set()
-    for layer in model.layers:
+    for i, layer in enumerate(model.layers):
         if addr(layer) in seen:
             continue
         if is_input_layer(layer):
@@ -382,30 +386,44 @@ def segment_branching_model(model: keras.Model):
             continue
         inputs = layer.input
         outputs = layer.output
-        single_input = type(inputs) is not list
-        single_output = type(outputs) is not list
+        single_input = not isinstance(inputs, list)
+        single_output = not isinstance(outputs, list)
+
+        ## Extend existsing block
         if single_input and single_output:
-            input_name = inputs._keras_history.layer.name
+            input_name = get_prev_layer(inputs).name
+            target_block = None
             for block in blocks:
                 if input_name == block[-1].name:
-                    block.append(layer)
+                    target_block = block
                     break
+            assert target_block
+            target_block.append(layer)
             seen.add(addr(layer))
             continue
+
+        ## Create node and new blocks for each output
         if single_input:
             inputs = [inputs]
-        if single_output:
-            outputs = [outputs]
-        node_name_parts = [
-            inp._keras_history.layer.name
+        node_input_names = tuple([
+            get_prev_layer(inp).name
             for inp in inputs
-        ]
-        for output in outputs:
-            block_start_layer = output._keras_history.layer
+        ])
+        node_output_names = []
+        # Search remaining layers for layers that use one of current layer's output as input
+        for search_layer in model.layers[i + 1:]:
+            search_layer_inp = search_layer.input
+            if (
+                isinstance(search_layer_inp, list)
+                or get_prev_layer(search_layer_inp).name != layer.name
+            ):
+                continue
+            block_start_layer = search_layer
+            node_output_names.append(block_start_layer.name)
             blocks.append([block_start_layer])
-            node_name_parts.append(block_start_layer.name)
             seen.add(addr(block_start_layer))
-        node_name = '-'.join(node_name_parts)
+
+        node_name = (node_input_names, tuple(node_output_names))
         nodes[node_name] = layer
         seen.add(addr(layer))
     return blocks, nodes
