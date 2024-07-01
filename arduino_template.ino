@@ -1,6 +1,6 @@
 #include "nnom.h"
 #include "weights.h"
-// #include <SoftwareSerial.h>
+#include <SoftwareSerial.h>
 #include <HardwareSerial.h>
 
 {{DEVICE_NAME_DEF}}
@@ -16,8 +16,8 @@ int BUTTON_PIN = PA8;
   int COMM_TX_PIN = PA2;
   HardwareSerial COMM(COMM_RX_PIN, COMM_TX_PIN);
 #else
-  int COMM_RX_PIN = 46;
-  int COMM_TX_PIN = 45;
+  int COMM_RX_PIN = 10;
+  int COMM_TX_PIN = 11;
   SoftwareSerial COMM(COMM_RX_PIN, COMM_TX_PIN);
 #endif
 
@@ -66,9 +66,6 @@ void setup() {
     const int _TX = PA9_R;
     Serial.setRx(_RX);
     Serial.setTx(_TX);
-  #else
-    pinMode(COMM_RX_PIN, INPUT);
-    pinMode(COMM_TX_PIN, OUTPUT);
   #endif
   pinMode(BUTTON_PIN, INPUT);
   Serial.begin(115200);
