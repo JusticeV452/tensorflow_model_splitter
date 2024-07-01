@@ -366,6 +366,51 @@ def save_nnom_model(model, file_path, num_samples=1000):
     )
 
 
+def addr(obj):
+    return hex(id(obj))
+
+
+def segment_branching_model(model: keras.Model):
+    blocks = []
+    nodes = {}
+    seen = set()
+    for layer in model.layers:
+        if addr(layer) in seen:
+            continue
+        if is_input_layer(layer):
+            blocks.append([layer])
+            continue
+        inputs = layer.input
+        outputs = layer.output
+        single_input = type(inputs) is not list
+        single_output = type(outputs) is not list
+        if single_input and single_output:
+            input_name = inputs._keras_history.layer.name
+            for block in blocks:
+                if input_name == block[-1].name:
+                    block.append(layer)
+                    break
+            seen.add(addr(layer))
+            continue
+        if single_input:
+            inputs = [inputs]
+        if single_output:
+            outputs = [outputs]
+        node_name_parts = [
+            inp._keras_history.layer.name
+            for inp in inputs
+        ]
+        for output in outputs:
+            block_start_layer = output._keras_history.layer
+            blocks.append([block_start_layer])
+            node_name_parts.append(block_start_layer.name)
+            seen.add(addr(block_start_layer))
+        node_name = '-'.join(node_name_parts)
+        nodes[node_name] = layer
+        seen.add(addr(layer))
+    return blocks, nodes
+
+
 def split_model(
         model: keras.Model,
         splitter: int | Callable[..., List[int]],
