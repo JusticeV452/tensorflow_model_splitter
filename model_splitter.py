@@ -8,7 +8,7 @@ import tensorflow.keras as keras
 from typing import Callable, List
 
 from tinymlgen import port as get_c_code
-from tensorflow.keras import layers
+from tensorflow.keras import layers as kl
 
 from nnom.scripts.nnom_utils import generate_model
 
@@ -17,9 +17,10 @@ KiB = 1024
 DEFAULT_OUTPUT_FOLDER = "outputs"
 
 
-def clone_layer(layer, seed=1337):
+def clone_layer(layer, seed=1337, **config_vars):
     # https://www.tensorflow.org/api_docs/python/tf/keras/models/clone_model
     config = layer.get_config()
+    config.update(config_vars)
     if seed is not None and "seed" in config:
         config["seed"] = seed
     new_layer = layer.__class__.from_config(config)
@@ -61,8 +62,8 @@ class SmallClassifier(BaseModel):
             *args, num_outputs=1, **kwargs):
         super().__init__(name=name, *args, **kwargs)
 
-        self.dense_1 = layers.Dense(inp_size, activation="relu", dtype=kwargs.get("dtype", tf.float32))
-        self.dense_2 = layers.Dense(num_outputs, activation=output_activation, dtype=kwargs.get("dtype", tf.float32))
+        self.dense_1 = kl.Dense(inp_size, activation="relu", dtype=kwargs.get("dtype", tf.float32))
+        self.dense_2 = kl.Dense(num_outputs, activation=output_activation, dtype=kwargs.get("dtype", tf.float32))
 
     def call(self, x):
         x = self.dense_1(x)
@@ -74,8 +75,8 @@ class LargeClassifier(BaseModel):
         super().__init__(name=name)
 
         self.encode = keras.Sequential(
-            [layers.Dense(enc_in_size, activation="relu") for _ in range(3)]
-            + [layers.Dense(enc_out_size, activation="relu")]
+            [kl.Dense(enc_in_size, activation="relu") for _ in range(3)]
+            + [kl.Dense(enc_out_size, activation="relu")]
         )
         self.classify = SmallClassifier(inp_size=enc_out_size, num_outputs=num_outputs)
 
@@ -88,7 +89,8 @@ def iter_layers(
         model: keras.Model | keras.Sequential,
         contains_layers=lambda layer: isinstance(
             layer, keras.Model | keras.Sequential
-        )):
+        ),
+        skip_input_layers=False):
     """
     Yields sublayers in model
 
@@ -115,6 +117,8 @@ def iter_layers(
     for layer in model.layers:
         if contains_layers(layer):
             yield from iter_layers(layer)
+            continue
+        if skip_input_layers and is_input_layer(layer):
             continue
         yield layer
 
@@ -266,7 +270,7 @@ def split_by_size(target_max_size: int | float):
     """
 
     def contains_input_layer(layers):
-        return len(list(filter(lambda l: is_input_layer(l), layers))) > 0
+        return len(list(filter(is_input_layer, layers))) > 0
 
     def splitter(model: keras.Model):
         segment_lengths = []
@@ -436,6 +440,49 @@ def segment_branching_model(model: keras.Model):
     return {block[0].name: block for block in blocks}, nodes
 
 
+def lateral_input_split(model: keras.Model, keras_input: keras.Input):
+    input_shape = list(keras_input.shape)
+    assert input_shape[-1] % 2 == 0
+    input_shape[-1] = keras_input.shape[-1] // 2
+    split_inputs = [keras.Input(input_shape), keras.Input(input_shape)]
+
+    model_layers = list(iter_layers(model, skip_input_layers=True))
+    split_layer = model_layers[0]
+    layer_parts = [
+        keras.Model(
+            inputs=inp,
+            outputs=clone_layer(
+                split_layer,
+                name=split_layer.name + f"_{i}",
+                activation=None)(inp))
+        for i, inp in enumerate(split_inputs)
+    ]
+    outputs = kl.Add()([m.output for m in layer_parts])
+    activation = split_layer.get_config().get("activation")
+    if activation:
+        if isinstance(activation, str):
+            activation = getattr(keras.activations, activation)
+        outputs = activation(outputs)
+
+    weights_dict = {}
+    for layer in model_layers[1:]:
+        weights_dict[layer.name] = layer.weights
+        outputs = clone_layer(layer)(outputs)
+
+    new_model = keras.Model(inputs=split_inputs, outputs=outputs)
+    # Copy weights
+    for i, sub_model in enumerate(layer_parts):
+        copy_kernel, copy_bias = split_layer.weights
+        sub_model.layers[-1].set_weights([
+            copy_kernel[input_shape[-1] * i: input_shape[-1] * (i + 1)],
+            copy_bias / 2
+        ])
+    for layer in iter_layers(new_model):
+        if layer.name in weights_dict:
+            layer.set_weights(weights_dict[layer.name])
+    return new_model
+
+
 def split_model(
         model: keras.Model,
         splitter: int | Callable[..., List[int]],
@@ -504,9 +551,9 @@ def split_model(
 
 def tiny_model_func(input_shape, num_outputs=1):
     inputs = keras.Input(shape=input_shape)
-    x = layers.Dense(10)(inputs)
-    x = layers.ReLU()(x)
-    x = layers.Dense(num_outputs)(x)
+    x = kl.Dense(10)(inputs)
+    x = kl.ReLU()(x)
+    x = kl.Dense(num_outputs)(x)
     return keras.Model(inputs=inputs, outputs=x)
 
 if __name__ == "__main__":
