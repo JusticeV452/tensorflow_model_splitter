@@ -378,7 +378,14 @@ def segment_branching_model(model: keras.Model):
     blocks = []
     nodes = {}
     seen = set()
-    for i, layer in enumerate(model.layers):
+
+    def find_block_by_tail(tail_name):
+        for block in blocks:
+            if tail_name == block[-1].name:
+                return block
+        return None
+
+    for i, layer in enumerate(iter_layers(model)):
         if addr(layer) in seen:
             continue
         if is_input_layer(layer):
@@ -392,11 +399,7 @@ def segment_branching_model(model: keras.Model):
         ## Extend existsing block
         if single_input and single_output:
             input_name = get_prev_layer(inputs).name
-            target_block = None
-            for block in blocks:
-                if input_name == block[-1].name:
-                    target_block = block
-                    break
+            target_block = find_block_by_tail(input_name)
             assert target_block
             target_block.append(layer)
             seen.add(addr(layer))
@@ -405,10 +408,14 @@ def segment_branching_model(model: keras.Model):
         ## Create node and new blocks for each output
         if single_input:
             inputs = [inputs]
-        node_input_names = tuple([
-            get_prev_layer(inp).name
-            for inp in inputs
-        ])
+        try:
+            node_input_names = tuple(
+                find_block_by_tail(get_prev_layer(inp).name)[0].name
+                for inp in inputs
+            )
+        except TypeError as e:
+            print("Inputs to layers accepting multiple inputs must be the output of a block.")
+            raise e
         node_output_names = []
         # Search remaining layers for layers that use one of current layer's output as input
         for search_layer in model.layers[i + 1:]:
@@ -426,7 +433,7 @@ def segment_branching_model(model: keras.Model):
         node_name = (node_input_names, tuple(node_output_names))
         nodes[node_name] = layer
         seen.add(addr(layer))
-    return blocks, nodes
+    return {block[0].name: block for block in blocks}, nodes
 
 
 def split_model(
