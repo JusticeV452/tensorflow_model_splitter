@@ -4,10 +4,14 @@
 #include <HardwareSerial.h>
 
 {{DEVICE_NAME_DEF}}
-int DEVICE_ID = {{DEVICE_ID}};
+int PRIMARY_ID = {{PRIMARY_ID}};
+int SECONDARY_ID = {{SECONDARY_ID}};
+bool IS_CONCAT = {{IS_CONCAT}};
 
 int ROOT_ID = {{ROOT_ID}};
 int TAIL_ID = {{TAIL_ID}};
+int ROW_SIZE = {{ROW_SIZE}};
+
 int MAX_WRITE_AVAILABLE = 63;
 
 int BUTTON_PIN = PA8;
@@ -24,6 +28,9 @@ int BUTTON_PIN = PA8;
 nnom_model_t *model;
 bool inputReady;
 bool outputReady;
+
+int lastDataAvailable;
+int dataBeforeWrite = 0;
 
 // DEBUG
 int LOOP_PERIOD_MS = 500;
@@ -73,56 +80,73 @@ void setup() {
 
 	model = nnom_model_create();
   randomizeInput(0, 128);
-  inputReady = DEVICE_ID == ROOT_ID;
-  outputReady = true;
+  inputReady = PRIMARY_ID == ROOT_ID;
+  outputReady = PRIMARY_ID == ROOT_ID && SECONDARY_ID == 0;
   loopTimer = millis();
 }
 
 void loop() {
   if (millis() - loopTimer >= LOOP_PERIOD_MS) {
-    if (DEVICE_ID == ROOT_ID && !digitalRead(BUTTON_PIN)) {
+    if (PRIMARY_ID == ROOT_ID && !digitalRead(BUTTON_PIN)) {
       randomizeInput(0, 128);
       inputReady = true;
     }
     
     // Calculate next output and send
     if (inputReady && outputReady) {
-      Serial.printf("[DEVICE: %d, LOOP: %d] Input: ", DEVICE_ID, loops);
+      Serial.printf("[ROW: %d, IDX: %d, LOOP: %d] Input: ", PRIMARY_ID, SECONDARY_ID, loops);
       printData(nnom_input_data, INPUT_LENGTH);
       model_run(model);
       Serial.printf(
-        "[DEVICE: %d, LOOP: %d] %sOutput: ",
-        DEVICE_ID, loops, DEVICE_ID == TAIL_ID ? "Final " : ""
+        "[ROW: %d, IDX: %d, LOOP: %d] %sOutput: ",
+        PRIMARY_ID, SECONDARY_ID, loops, PRIMARY_ID == TAIL_ID ? "Final " : ""
       );
       printData(nnom_output_data, OUTPUT_LENGTH);
       sendData(nnom_output_data, OUTPUT_LENGTH);
       inputReady = false;
       outputReady = false;
     }
+    int currentDataAvailable = COMM.available();
+    bool newDataAvailable = currentDataAvailable > lastDataAvailable;
+    lastDataAvailable = currentDataAvailable;
 
-    if (DEVICE_ID == ROOT_ID && COMM.available()) {
+    if (PRIMARY_ID == ROOT_ID && currentDataAvailable) {
       Serial.println("ROOT got:");
       readData(nnom_input_data, INPUT_LENGTH);
       printData(nnom_input_data, INPUT_LENGTH);
       Serial.println("Generating next input...");
       randomizeInput(0, 128);
       inputReady = true;
-    } else {
-      inputReady = COMM.available() == INPUT_LENGTH;
+    } else if (currentDataAvailable == INPUT_LENGTH) {
+      inputReady = true;
+    } else if (IS_CONCAT && newDataAvailable) {
+      // Ping other input nodes to send data
+      Serial.write(1);
     }
 
-    // TODO: allow filling buffer with more than 1 outputs
-    outputReady = COMM.availableForWrite() >= MAX_WRITE_AVAILABLE;
-    if (inputReady && DEVICE_ID != ROOT_ID) {
-      Serial.printf("[DEVICE: %d, LOOP: %d] Input ready.\n", DEVICE_ID, loops);
+    if (inputReady && PRIMARY_ID != ROOT_ID) {
+      Serial.printf("[ROW: %d, IDX: %d, LOOP: %d] Input ready.\n", PRIMARY_ID, SECONDARY_ID, loops);
       readData(nnom_input_data, INPUT_LENGTH);
+    }
+
+    // May function incorrectly if Serial port on CONCAT device is used for printing
+    int serialAvailable = Serial.available();
+    if (!IS_CONCAT && serialAvailable > 0) {
+      while (Serial.read() != -1) {}; // Empty Serial of all data
+      // Try to distinguish between irrelevant prints and signals to send data
+      if (serialAvailable == 1) { dataBeforeWrite += 1; }
+    }
+    
+    bool outputWasReady = outputReady;
+    // TODO: allow filling buffer with more than 1 outputs
+    // Should only update outputReady if it was not ready before? (once made available, stays available until next send)
+    outputReady = COMM.availableForWrite() >= MAX_WRITE_AVAILABLE && dataBeforeWrite == SECONDARY_ID;
+    if (dataBeforeWrite == ROW_SIZE - 1) { dataBeforeWrite = 0; }
+    if (!outputWasReady && outputReady && PRIMARY_ID != TAIL_ID) {
+      Serial.printf("[ROW: %d, IDX: %d, LOOP: %d] Output ready.\n", PRIMARY_ID, SECONDARY_ID, loops);
     }
 
     loopTimer = millis();
     loops++;
-  }
-
-  if (Serial.available() > 0) {
-    Serial.println(Serial.readString());
   }
 }
