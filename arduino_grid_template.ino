@@ -1,13 +1,24 @@
 #include "nnom.h"
 #include "weights.h"
-#include <SoftwareSerial.h>
+// #include <SoftwareSerial.h>
 #include <HardwareSerial.h>
 
-{{DEVICE_NAME_DEF}}
+#define STM32C0116_DK
+#if defined(MULT_REDUCE)
+  int8_t INPUT_FILL_VALUE = 1;
+  int8_t reduce(int8_t v1, int8_t v2) { return v1 * v2; }
+#else
+  int8_t INPUT_FILL_VALUE = 0;
+  int8_t reduce(int8_t v1, int8_t v2) { return v1 + v2; }
+#endif
+// Specific device config
 int PRIMARY_ID = {{PRIMARY_ID}};
 int SECONDARY_ID = {{SECONDARY_ID}};
 bool IS_CONCAT = {{IS_CONCAT}};
+int NUM_THRESHOLDS = {{NUM_THRESHOLDS}};
+int INPUT_THRESHOLDS[] = {{INPUT_THRESHOLDS}};
 
+// Shared device config
 int ROOT_ID = {{ROOT_ID}};
 int TAIL_ID = {{TAIL_ID}};
 int ROW_SIZE = {{ROW_SIZE}};
@@ -29,8 +40,9 @@ nnom_model_t *model;
 bool inputReady;
 bool outputReady;
 
-int lastDataAvailable;
 int dataBeforeWrite = 0;
+int thresholdIndex = 0;
+int inputLength = 0;
 
 // DEBUG
 int LOOP_PERIOD_MS = 500;
@@ -50,12 +62,6 @@ void sendData(int8_t* data, int data_length) {
   }
 }
 
-void readData(int8_t* data, int data_length) {
-  for (int i = 0; i < data_length; i++) {
-    data[i] = (int8_t) COMM.read();
-  }
-}
-
 void printData(int8_t* data, int data_length) {
   Serial.print("{");
   for (int i = 0; i < data_length; i++) {
@@ -65,6 +71,15 @@ void printData(int8_t* data, int data_length) {
     }
   }
   Serial.println("}");
+}
+
+void resetInput() {
+  inputReady = false;
+  inputLength = 0;
+  thresholdIndex = 0;
+  for (int8_t i = 0; i < INPUT_LENGTH; i++) {
+    nnom_input_data[i] = INPUT_FILL_VALUE;
+  }
 }
 
 void setup() {
@@ -79,10 +94,35 @@ void setup() {
   COMM.begin(115200);
 
 	model = nnom_model_create();
-  randomizeInput(0, 128);
-  inputReady = PRIMARY_ID == ROOT_ID;
+  if (PRIMARY_ID != ROOT_ID) {
+    resetInput();
+  } else {
+    randomizeInput(0, 128);
+    inputReady = true;
+  }
   outputReady = PRIMARY_ID == ROOT_ID && SECONDARY_ID == 0;
   loopTimer = millis();
+}
+
+// Concatenate: INPUT_LENGTH = INPUT_THRESHSOLDS[-1], reduce = add
+// Add: INPUT_LENGTH = INPUT_THRESHOLDS[n], reduce = add
+// Mult: INPUT_LENGTH = INPUT_THRESHOLDS[n], reduce = mult
+int updateInput() {
+  int currentDataAvailable = COMM.available();
+  if (!currentDataAvailable) { return currentDataAvailable; }
+  int data = COMM.read();
+  do {
+    nnom_input_data[inputLength % INPUT_LENGTH] = reduce(nnom_input_data[inputLength % INPUT_LENGTH], (int8_t) data);
+    data = COMM.read();
+    inputLength++;
+  } while (data != -1);
+
+  // Signal next device
+  if (IS_CONCAT && thresholdIndex < NUM_THRESHOLDS - 1 && inputLength == INPUT_THRESHOLDS[thresholdIndex]) {
+    thresholdIndex++;
+    Serial.write(1);
+  }
+  return currentDataAvailable;
 }
 
 void loop() {
@@ -103,30 +143,20 @@ void loop() {
       );
       printData(nnom_output_data, OUTPUT_LENGTH);
       sendData(nnom_output_data, OUTPUT_LENGTH);
-      inputReady = false;
+      resetInput();
       outputReady = false;
     }
-    int currentDataAvailable = COMM.available();
-    bool newDataAvailable = currentDataAvailable > lastDataAvailable;
-    lastDataAvailable = currentDataAvailable;
 
+    int currentDataAvailable = updateInput();    
     if (PRIMARY_ID == ROOT_ID && currentDataAvailable) {
       Serial.println("ROOT got:");
-      readData(nnom_input_data, INPUT_LENGTH);
       printData(nnom_input_data, INPUT_LENGTH);
       Serial.println("Generating next input...");
       randomizeInput(0, 128);
       inputReady = true;
-    } else if (currentDataAvailable == INPUT_LENGTH) {
+    } else if (PRIMARY_ID != ROOT_ID && thresholdIndex == NUM_THRESHOLDS - 1 && inputLength == INPUT_THRESHOLDS[thresholdIndex]) {
       inputReady = true;
-    } else if (IS_CONCAT && newDataAvailable) {
-      // Ping other input nodes to send data
-      Serial.write(1);
-    }
-
-    if (inputReady && PRIMARY_ID != ROOT_ID) {
       Serial.printf("[ROW: %d, IDX: %d, LOOP: %d] Input ready.\n", PRIMARY_ID, SECONDARY_ID, loops);
-      readData(nnom_input_data, INPUT_LENGTH);
     }
 
     // May function incorrectly if Serial port on CONCAT device is used for printing
@@ -150,3 +180,4 @@ void loop() {
     loops++;
   }
 }
+
