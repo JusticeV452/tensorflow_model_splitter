@@ -181,18 +181,23 @@ def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
     outputs = inputs
     for layer in layers:
         # Copy layers to avoid disconnected graph error
-        outputs = clone_layer(layer)(outputs)
+        layer_clone = clone_layer(layer, activation=None)
+        outputs = layer_clone(outputs)
+        # NNoM does not support activation in layer, so make separate activation layer
+        if activation := layer.get_config().get("activation"):
+            if isinstance(activation, str):
+                # activation = getattr(keras.activations, activation)
+                activation = keras.layers.Activation(activation)
+            outputs = activation(outputs)
 
     model = keras.Model(inputs=inputs, outputs=outputs)
 
     # Copy weights from original layers to new model
-    num_model_layers = len(model.layers) - 1  # Model layers - input layer
-    num_inp_layers = len(layers)
-    assert num_model_layers == num_inp_layers, f"{num_model_layers} != {num_inp_layers}"
-    for i, layer in enumerate(layers):
-        if not hasattr(layer, "weights"):
+    weights_dict = {layer.name: layer.get_weights() for layer in layers}
+    for layer in model.layers:
+        if is_input_layer(layer) or layer.name not in weights_dict:
             continue
-        model.layers[i + 1].set_weights(layer.weights)
+        layer.set_weights(weights_dict[layer.name])
 
     return model
 
