@@ -314,7 +314,7 @@ def split_by_size(target_max_size: int | float):
     return splitter
 
 
-def save_tflite_model(model, file_name):
+def save_tflite_model(model, file_name, _last_saver_result=None):
     """
     Export model to tflite file
 
@@ -340,7 +340,7 @@ def save_tflite_model(model, file_name):
         file.write(tflite_model)
 
 
-def save_tinymlgen_model(model, file_name):
+def save_tinymlgen_model(model, file_name, _last_saver_result=None):
     """
     Export model to c code for use with EloquentML
 
@@ -363,15 +363,28 @@ def save_tinymlgen_model(model, file_name):
         file.write(c_code)
 
 
-def save_nnom_model(model, file_path, num_samples=1000):
-    # TODO: Adapt to accept representative dataset other than random
-    parent, file_name = os.path.split(file_path)
-    nnom_path = os.path.join(parent, "nnom")
-    os.makedirs(nnom_path, exist_ok=True)
-    generate_model(
-        model,
-        np.random.rand(num_samples, *model.input_shape[1:]),
-        name=os.path.join(nnom_path, f"{file_name}.h")
+def get_nnom_saver(init_test_set=None, num_samples=1000):
+    def save(model, file_path, x_test=None):
+        parent, file_name = os.path.split(file_path)
+        nnom_path = os.path.join(parent, "nnom")
+        os.makedirs(nnom_path, exist_ok=True)
+        if type(x_test) is type(None):
+            x_test = (
+                init_test_set
+                if type(init_test_set) is not type(None)
+                else np.random.rand(num_samples, *model.input_shape[1:])
+            )
+        generate_model(
+            model, x_test,
+            name=os.path.join(nnom_path, f"{file_name}.h")
+        )
+        return model(x_test).numpy()
+    return save
+
+
+def save_nnom_model(model, file_path, x_test=None, num_samples=1000):
+    return get_nnom_saver(x_test, num_samples=num_samples)(
+        model, file_path
     )
 
 
@@ -535,14 +548,14 @@ def split_model(
 
     segments = []
     all_model_layers = list(iter_layers(model))
-    for i in range(len(segment_indicies)):
-        start, end = segment_indicies[i]
+    last_saver_result = None
+    for i, (start, end) in enumerate(segment_indicies):
         segment_layers = all_model_layers[start:end]
         segment = model_wrap(segment_layers)
 
         if saver:
             file_name = os.path.join(save_root, f"{model.name}_{i}")
-            saver(segment, file_name)
+            last_saver_result = saver(segment, file_name, last_saver_result)
         segments.append(segment)
 
     test_input = np.random.rand(1, *segments[0].input_shape[1:])
