@@ -179,14 +179,29 @@ def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
 
     # Build outputs
     outputs = inputs
+    last_non_activ_name = None
     for layer in layers:
+        is_activation_layer = "layers.activation" in str(type(layer))
+
         # Copy layers to avoid disconnected graph error
-        layer_clone = clone_layer(layer, activation=None)
+        config_update = {}
+        if not is_activation_layer:
+            config_update["activation"] = None
+        layer_clone = clone_layer(layer, **config_update)
         outputs = layer_clone(outputs)
+
+        # Forcibly set activation input name to last layer
+        # Otherwise, when activations from keras.layer.activation are present in the
+        # source layers, a cloned activation layer's input name will be a placeholder
+        # (unsure why) instead of the name of the last layer, which will break NNoM
+        if is_activation_layer:
+            layer_clone.input._name = last_non_activ_name
+        else:
+            last_non_activ_name = layer_clone.name
+
         # NNoM does not support activation in layer, so make separate activation layer
         if activation := layer.get_config().get("activation"):
             if isinstance(activation, str):
-                # activation = getattr(keras.activations, activation)
                 activation = keras.layers.Activation(activation)
             outputs = activation(outputs)
 
@@ -532,7 +547,7 @@ def split_model(
 
     """
 
-    if type(splitter) is int:
+    if isinstance(splitter, int):
         splitter = split_by_num_segments(splitter)
 
     segment_sizes = splitter(model)
