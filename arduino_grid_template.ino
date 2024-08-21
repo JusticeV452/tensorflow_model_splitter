@@ -5,34 +5,34 @@
 
 #define STM32C0116_DK
 #if defined(MULT_REDUCE)
-  int8_t INPUT_FILL_VALUE = 1;
+  const int8_t INPUT_FILL_VALUE = 1;
   int8_t reduce(int8_t v1, int8_t v2) { return v1 * v2; }
 #else
-  int8_t INPUT_FILL_VALUE = 0;
+  const int8_t INPUT_FILL_VALUE = 0;
   int8_t reduce(int8_t v1, int8_t v2) { return v1 + v2; }
 #endif
 // Specific device config
-int PRIMARY_ID = {{PRIMARY_ID}};
-int SECONDARY_ID = {{SECONDARY_ID}};
-bool IS_CONCAT = {{IS_CONCAT}};
-int NUM_THRESHOLDS = {{NUM_THRESHOLDS}};
-int INPUT_THRESHOLDS[] = {{INPUT_THRESHOLDS}};
+const int PRIMARY_ID = {{PRIMARY_ID}};
+const int SECONDARY_ID = {{SECONDARY_ID}};
+const bool IS_CONCAT = {{IS_CONCAT}};
+const int NUM_THRESHOLDS = {{NUM_THRESHOLDS}};
+const int INPUT_THRESHOLDS[] = {{INPUT_THRESHOLDS}};
 
 // Shared device config
-int ROOT_ID = {{ROOT_ID}};
-int TAIL_ID = {{TAIL_ID}};
-int ROW_SIZE = {{ROW_SIZE}};
+const int ROOT_ID = {{ROOT_ID}};
+const int TAIL_ID = {{TAIL_ID}};
+const int ROW_SIZE = {{ROW_SIZE}};
 
-int MAX_WRITE_AVAILABLE = 63;
+const int MAX_WRITE_AVAILABLE = 63;
 
-int BUTTON_PIN = PA8;
+const int BUTTON_PIN = PA8;
 #ifdef STM32C0116_DK
-  int COMM_RX_PIN = PA3;
-  int COMM_TX_PIN = PA2;
+  const int COMM_RX_PIN = PA3;
+  const int COMM_TX_PIN = PA2;
   HardwareSerial COMM(COMM_RX_PIN, COMM_TX_PIN);
 #else
-  int COMM_RX_PIN = 10;
-  int COMM_TX_PIN = 11;
+  const int COMM_RX_PIN = 10;
+  const int COMM_TX_PIN = 11;
   SoftwareSerial COMM(COMM_RX_PIN, COMM_TX_PIN);
 #endif
 
@@ -45,7 +45,7 @@ int thresholdIndex = 0;
 int inputLength = 0;
 
 // DEBUG
-int LOOP_PERIOD_MS = 500;
+const int LOOP_PERIOD_MS = 500;
 int loops = 0;
 long loopTimer;
 
