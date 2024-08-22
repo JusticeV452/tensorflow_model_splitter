@@ -273,11 +273,12 @@ def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
     outputs = inputs
     last_non_activ_name = None
     for layer in layers:
-        is_activation_layer = "layers.activation" in str(type(layer))
+        assert not is_input_layer(layer), "Input layers are only accepted as first layer in `layers`"
+        is_activ_layer = is_activation_layer(layer)
 
         # Copy layers to avoid disconnected graph error
         config_update = {}
-        if not is_activation_layer:
+        if not is_activ_layer:
             config_update["activation"] = None
         layer_clone = clone_layer(layer, **config_update)
         outputs = layer_clone(outputs)
@@ -286,13 +287,14 @@ def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
         # Otherwise, when activations from keras.layer.activation are present in the
         # source layers, a cloned activation layer's input name will be a placeholder
         # (unsure why) instead of the name of the last layer, which will break NNoM
-        if is_activation_layer:
+        if is_activ_layer:
             layer_clone.input._name = last_non_activ_name
+            continue
         else:
             last_non_activ_name = layer_clone.name
 
         # NNoM does not support activation in layer, so make separate activation layer
-        if activation := layer.get_config().get("activation"):
+        if (activation := layer.get_config().get("activation")) and activation != "linear":
             if isinstance(activation, str):
                 activation = keras.layers.Activation(activation)
             outputs = activation(outputs)
