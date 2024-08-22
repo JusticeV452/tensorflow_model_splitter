@@ -172,6 +172,24 @@ def get_parent_result(
     return combined_parent_result
 
 
+def check_segment_split(model, segments_dict, connections, inps=None):
+    inp_list = get_input_list(model)
+    if type(inps) is type(None):
+        inps = [np.random.rand(1, *layer.shape[1:]) for layer in inp_list]
+    expected = model(inps).numpy()
+    inp_dict = {layer.name: arr for layer, arr in zip(inp_list, inps)}
+    intermediate_results = {}
+    node_ids = get_segment_ids(segments_dict.keys(), connections)
+    for node_name, node_id in node_ids.items():
+        parent_result = get_parent_result(
+            node_name, connections, intermediate_results,
+            default_func=lambda node_name: inp_dict[node_name]
+        )
+        segment = segments_dict[node_name]
+        intermediate_results[node_name] = segment(parent_result)
+    assert np.array_equal(intermediate_results[node_name], expected)
+
+
 class BaseModel(keras.Model):
     def build(self, inp_shape):
         # Build constituent layers when model is built
@@ -843,6 +861,8 @@ def split_model(
                 f"Result of split model on {test_input} does not match model."
             )
         blocks[node_name] = segment
+    if isinstance(orig_model, keras.Model):
+        check_segment_split(orig_model, blocks, connections)
 
     return blocks
 
