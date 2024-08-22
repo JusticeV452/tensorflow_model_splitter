@@ -309,7 +309,27 @@ def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
     return model
 
 
-def split_by_num_segments(num_segments: int):
+def group_layers(layers, independent_activations=False):
+    groups = []
+    current_group = []
+    for layer in layers:
+        if is_input_layer(layer):
+            if current_group:
+                groups.append(current_group)
+                current_group = []
+            current_group.append(layer)
+        elif not independent_activations and is_activation_layer(layer):
+            groups[-1].append(layer)
+        else:
+            current_group.append(layer)
+            groups.append(current_group)
+            current_group = []
+    if current_group:
+        groups.append(current_group)
+    return groups
+
+
+def split_by_num_segments(num_segments: int, independent_activations=False):
     """
     Create splitter for use in make_c_code function.
     Splitter will split model into `num_segments` equal segments of
@@ -331,34 +351,30 @@ def split_by_num_segments(num_segments: int):
 
     def splitter(model: keras.Model):
         all_model_layers = list(iter_layers(model))
-        num_layers = len(all_model_layers)
-        layers_per_segment = num_layers / num_segments
-        assert layers_per_segment >= 1, f"Not enough layers for {num_segments} segements"
-        target_segment_len = round(layers_per_segment)
-        segments = [0]
+        grouped_layers = group_layers(
+            all_model_layers,
+            independent_activations=independent_activations
+        )
+        layers_per_segment = len(all_model_layers) / num_segments
+        smallest_group = min(grouped_layers, key=len)
+        assert layers_per_segment >= len(smallest_group), (
+            "Not enough layers for {num_segments} segements when "
+            f"smallest group is size {len(smallest_group)}"
+        )
 
-        i = 0
-        while i < num_layers:
-            segment_completion = 0
-            while (
-                segment_completion != target_segment_len
-                and i < num_layers
-            ):
-                # Input layers do not count torward segment completion
-                segment_completion += int(
-                    not is_input_layer(all_model_layers[i])
-                )
-                segments[-1] += 1
-                i += 1
-            if len(segments) < num_segments:
-                segments.append(0)
+        while len(grouped_layers) > num_segments:
+            sm_idx = grouped_layers.index(smallest_group)
+            neighbors = []
+            if sm_idx > 0:
+                neighbors.append(sm_idx - 1)
+            if sm_idx < len(grouped_layers) - 1:
+                neighbors.append(sm_idx + 1)
+            fuse_idx = min(neighbors, key=lambda i: len(grouped_layers[i]))
+            lower_idx, upper_idx = sorted([sm_idx, fuse_idx])
+            grouped_layers[lower_idx].extend(grouped_layers.pop(upper_idx))
+            smallest_group = min(grouped_layers, key=len)
 
-        # Redistribute layers
-        j = num_segments - 1
-        while j > 0 and segments[j] < 1:
-            segments[j - 1] -= 1
-            segments[j] += 1
-            j -= 1
+        segments = [len(group) for group in grouped_layers]
         return segments
 
     return splitter
