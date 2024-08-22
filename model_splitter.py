@@ -534,6 +534,13 @@ def segment_branching_model(model: keras.Model):
                 return block
         return None
 
+    def add_to_parent_blocks(layer, inputs):
+        for inp in inputs:
+            input_name = get_prev_layer(inp).name
+            target_block = find_block_by_tail(input_name)
+            assert target_block
+            target_block.append(layer)
+
     all_model_layers = list(iter_layers(model))
 
     for i, layer in enumerate(all_model_layers):
@@ -542,23 +549,23 @@ def segment_branching_model(model: keras.Model):
         if is_input_layer(layer):
             blocks.append([layer])
             continue
-        inputs = layer.input
+        inputs = get_input_list(layer)
         outputs = layer.output
-        single_input = not isinstance(inputs, list)
-        single_output = not isinstance(outputs, list)
+        single_input = len(inputs) == 1
+        children = []
+        for other_layer in all_model_layers[i + 1:]:
+            input_names = [l.name.split('/')[0] for l in get_input_list(other_layer)]
+            if layer.name in input_names:
+                children.append(other_layer)
+        single_output = not isinstance(outputs, list) and len(children) < 2
 
         ## Extend existsing block
         if single_input and single_output:
-            input_name = get_prev_layer(inputs).name
-            target_block = find_block_by_tail(input_name)
-            assert target_block
-            target_block.append(layer)
+            add_to_parent_blocks(layer, inputs)
             seen.add(addr(layer))
             continue
 
         ## Create node and new blocks for each output
-        if single_input:
-            inputs = [inputs]
         try:
             node_input_names = tuple(
                 find_block_by_tail(get_prev_layer(inp).name)[0].name
@@ -582,7 +589,9 @@ def segment_branching_model(model: keras.Model):
             seen.add(addr(block_start_layer))
 
         node_name = (node_input_names, tuple(node_output_names))
-        connections[node_name] = layer
+        connections[node_name] = None if getattr(layer, "weights", []) else layer
+        if single_input:
+            add_to_parent_blocks(layer, inputs)
         seen.add(addr(layer))
     return {
         "nodes": {block[0].name: block for block in blocks},
