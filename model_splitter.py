@@ -15,6 +15,12 @@ from nnom.scripts.nnom_utils import generate_model
 SIZE_UNITS = ['B', "KB", "MB", "GB", "TB"]
 KiB = 1024
 DEFAULT_OUTPUT_FOLDER = "outputs"
+
+
+def addr(obj: object):
+    return hex(id(obj))
+
+
 def is_input_layer(layer: kl.Layer):
     """
     Check if layer is an input layer
@@ -513,17 +519,13 @@ def save_nnom_model(model, file_path, x_test=None, num_samples=1000):
     )
 
 
-def addr(obj: object):
-    return hex(id(obj))
-
-
 def get_prev_layer(keras_tensor):
     return keras_tensor._keras_history.layer
 
 
 def segment_branching_model(model: keras.Model):
     blocks = []
-    nodes = {}
+    connections = {}
     seen = set()
 
     def find_block_by_tail(tail_name):
@@ -532,7 +534,9 @@ def segment_branching_model(model: keras.Model):
                 return block
         return None
 
-    for i, layer in enumerate(iter_layers(model)):
+    all_model_layers = list(iter_layers(model))
+
+    for i, layer in enumerate(all_model_layers):
         if addr(layer) in seen:
             continue
         if is_input_layer(layer):
@@ -565,7 +569,7 @@ def segment_branching_model(model: keras.Model):
             raise e
         node_output_names = []
         # Search remaining layers for layers that use one of current layer's output as input
-        for search_layer in model.layers[i + 1:]:
+        for search_layer in all_model_layers[i + 1:]:
             search_layer_inp = search_layer.input
             if (
                 isinstance(search_layer_inp, list)
@@ -578,9 +582,13 @@ def segment_branching_model(model: keras.Model):
             seen.add(addr(block_start_layer))
 
         node_name = (node_input_names, tuple(node_output_names))
-        nodes[node_name] = layer
+        connections[node_name] = layer
         seen.add(addr(layer))
-    return {block[0].name: block for block in blocks}, nodes
+    return {
+        "nodes": {block[0].name: block for block in blocks},
+        "connections": connections
+    }
+
 
 
 def lateral_input_split(model: keras.Model, keras_input: keras.Input):
