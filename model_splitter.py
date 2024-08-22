@@ -5,7 +5,8 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.keras as keras
 
-from typing import Callable, List
+from datetime import datetime
+from typing import Callable, List, Dict, TypedDict
 
 from tinymlgen import port as get_c_code
 from tensorflow.keras import layers as kl
@@ -15,6 +16,11 @@ from nnom.scripts.nnom_utils import generate_model
 SIZE_UNITS = ['B', "KB", "MB", "GB", "TB"]
 KiB = 1024
 DEFAULT_OUTPUT_FOLDER = "outputs"
+
+
+class SegmentedModel(TypedDict):
+    nodes: Dict[str, list]
+    connections: Dict[tuple, str]
 
 
 def addr(obj: object):
@@ -137,6 +143,33 @@ def check_split(model, segments, inp):
     for segment in segments:
         segments_result = segment(segments_result)
     return np.array_equal(expected, segments_result)
+
+
+def get_connection_key(node_name, connections):
+    for inputs, outputs in connections:
+        if node_name in outputs:
+            return inputs, outputs
+    return None
+
+
+def get_parent_result(
+        node_name, connections, intermediate_results,
+        default_func=lambda node_name: None):
+    connection_key = get_connection_key(node_name, connections)
+    if connection_key:
+        inputs, outputs = connection_key
+        parent_results = [
+            intermediate_results[parent_name]
+            for parent_name in inputs
+        ]
+        merge_func = (
+            (lambda x: connections[connection_key](x).numpy())
+            if len(inputs) > 1 else lambda x: x[0]
+        )
+        combined_parent_result = merge_func(parent_results)
+    else:
+        combined_parent_result = default_func(node_name)
+    return combined_parent_result
 
 
 class BaseModel(keras.Model):
@@ -445,7 +478,7 @@ def split_by_size(target_max_size: int | float):
     return splitter
 
 
-def save_tflite_model(model, file_name, _last_saver_result=None):
+def save_tflite_model(model, save_root, segment_id, _last_saver_result=None):
     """
     Export model to tflite file
 
@@ -465,13 +498,14 @@ def save_tflite_model(model, file_name, _last_saver_result=None):
     # Convert the model
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
     tflite_model = converter.convert()
-
+    _, save_name = os.path.split(save_root)
+    file_name = os.path.join(save_root, f"{save_name}_{segment_id}.tflite")
     # Save the model.
-    with open(file_name + ".tflite", 'wb') as file:
+    with open(file_name, 'wb') as file:
         file.write(tflite_model)
 
 
-def save_tinymlgen_model(model, file_name, _last_saver_result=None):
+def save_tinymlgen_model(model, save_root, segment_id, _last_saver_result=None):
     """
     Export model to c code for use with EloquentML
 
@@ -489,15 +523,16 @@ def save_tinymlgen_model(model, file_name, _last_saver_result=None):
     """
 
     c_code = get_c_code(model)
-
-    with open(file_name + ".h", "w+", encoding="utf-8") as file:
+    _, save_name = os.path.split(save_root)
+    file_name = os.path.join(save_root, f"{save_name}_{segment_id}.h")
+    with open(file_name, "w+", encoding="utf-8") as file:
         file.write(c_code)
 
 
 def get_nnom_saver(init_test_set=None, num_samples=1000):
-    def save(model, file_path, x_test=None):
-        parent, file_name = os.path.split(file_path)
-        nnom_path = os.path.join(parent, "nnom")
+    def save(model, save_root, segment_id, x_test=None):
+        _, save_name = os.path.split(save_root)
+        nnom_path = os.path.join(save_root, "nnom")
         os.makedirs(nnom_path, exist_ok=True)
         if type(x_test) is type(None):
             x_test = (
@@ -507,20 +542,76 @@ def get_nnom_saver(init_test_set=None, num_samples=1000):
             )
         generate_model(
             model, x_test,
-            name=os.path.join(nnom_path, f"{file_name}.h")
+            name=os.path.join(nnom_path, f"{save_name}_{segment_id}.h")
         )
         return model(x_test).numpy()
     return save
 
 
-def save_nnom_model(model, file_path, x_test=None, num_samples=1000):
+def save_nnom_model(model, save_root, segment_id, x_test=None, num_samples=1000):
     return get_nnom_saver(x_test, num_samples=num_samples)(
-        model, file_path
+        model, save_root, segment_id
     )
 
 
 def get_prev_layer(keras_tensor):
     return keras_tensor._keras_history.layer
+
+
+def get_segment_ids(node_names, connections):
+    """
+    
+
+    Parameters
+    ----------
+    node_names : TYPE
+        DESCRIPTION.
+    connections : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    segment_ids : TYPE
+        DESCRIPTION.
+
+    """
+    segment_ids = {}
+    connections_list = list(connections)
+    last_level_outputs = set()
+    all_layer_inputs = set(inp for inputs, _ in connections for inp in inputs)
+    while connections_list:
+        found_parent = False
+        for i in range(len(connections_list)):
+            found_parent = False
+            inputs, outputs = connections_list[i]
+            for j in range(len(connections_list)):
+                if j == i:
+                    continue
+                other_inputs, other_outputs = connections_list[j]
+                if any(inp in set(other_outputs) | last_level_outputs for inp in inputs):
+                    found_parent = True
+                    break
+            if not found_parent:
+                break
+        if found_parent:
+            last_level_outputs = set()
+            continue
+        last_group_id = 0
+        for k, inp in enumerate(inputs):
+            segment_ids[inp] = f"{len(connections) - len(connections_list)}_{k}"
+            last_group_id = k
+        for k, out in enumerate(outputs):
+            if out not in all_layer_inputs:
+                last_group_id += 1
+                segment_ids[out] = f"{len(connections) - len(connections_list)}_{last_group_id}"
+        last_level_outputs.update(outputs)
+        connections_list.pop(i)
+    # Model has no branches
+    if not segment_ids:
+        for i, node_name in enumerate(node_names):
+            segment_ids[node_name] = f"0_{i}"
+    assert len(segment_ids) == len(node_names), f"{len(segment_ids)} != {len(node_names)}"
+    return segment_ids
 
 
 def segment_branching_model(model: keras.Model):
@@ -661,9 +752,10 @@ def lateral_input_split(model: keras.Model, keras_input: keras.Input):
 
 
 def split_model(
-        model: keras.Model,
-        splitter: int | Callable[..., List[int]],
+        model: keras.Model | SegmentedModel,
+        splitter: int | Callable[..., List[int]] | Dict[str, int | Callable[..., List[int]]],
         output_folder=DEFAULT_OUTPUT_FOLDER,
+        save_name=None,
         saver=None):
     """
     Splits model into segments derived from `splitter` and saves the segments
@@ -671,59 +763,88 @@ def split_model(
 
     Parameters
     ----------
-    model : keras.Model
+    model : keras.Model | SegmentedModel
         Model to split and save.
-    splitter : TYPE, optional
-        Used to split model into segments. takes keras.Model as argument and
-        returns a list of ints (segment sizes).
-        The sum of segment sizes should be equal to the number of layers in the model.
-        The default is split_by_size(1).
+    splitter : int | func | dict, optional
+        Used to split model into segments.
+        - int, splits blocks in the model into `splitter` segments
+        - func, takes keras.Model as argument and returns a list of ints (segment sizes).
+        - dict, dictionary mapping block names to splitter int/func
+        The sum of segment sizes must be equal to the number of layers in the model.
     output_folder : str, optional
         Folder to save output in. The default is ''.
+    save_name : str, optional
+        Folder created in output folder that saver will save outputs to.
+        The default is model-mm-dd-yy-hh-mm-ss
     saver : function, optional
         Used to save model segments, takes model and file_path without extention.
-        The default is save_tinymlgen_model.
+        The default is None.
 
     Returns
     ----------
-    segments : list of keras.Model
+    blocks : dict {str: list of keras.Model}
         segments of model created and saved
 
     """
 
+    orig_model = model
+    if isinstance(model, keras.Model):
+        save_name = model.name if save_name is None else save_name
+        model = segment_branching_model(model)
+        
+    save_name = (
+        "model_" + datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
+        if save_name is None else save_name
+    )
+
     if isinstance(splitter, int):
         splitter = split_by_num_segments(splitter)
 
-    segment_sizes = splitter(model)
+    if not isinstance(splitter, dict):
+        splitter = {key: splitter for key in model["nodes"]}
 
-    segment_indicies = [
-        (prev_sum := sum(segment_sizes[:i]), prev_sum + segment_sizes[i])
-        for i in range(len(segment_sizes))
-    ]
+    blocks = {}
+    saver_results = {}
+    connections = model["connections"]
+    node_ids = get_segment_ids(model["nodes"].keys(), connections)
 
     if saver:
-        save_root = os.path.join(output_folder, model.name)
+        save_root = os.path.join(output_folder, save_name)
         os.makedirs(save_root, exist_ok=True)
 
-    segments = []
-    all_model_layers = list(iter_layers(model))
-    last_saver_result = None
-    for i, (start, end) in enumerate(segment_indicies):
-        segment_layers = all_model_layers[start:end]
-        segment = model_wrap(segment_layers)
+    for node_name, node_id in node_ids.items():
+        sub_model_layers = model["nodes"][node_name]
+        sub_model = model_wrap(sub_model_layers)
+        segment_sizes = splitter[node_name](sub_model)
 
-        if saver:
-            file_name = os.path.join(save_root, f"{model.name}_{i}")
-            last_saver_result = saver(segment, file_name, last_saver_result)
-        segments.append(segment)
+        segment_indices = [
+            (prev_sum := sum(segment_sizes[:i]), prev_sum + segment_sizes[i])
+            for i in range(len(segment_sizes))
+        ]
 
-    test_input = np.random.rand(1, *segments[0].input_shape[1:])
-    if not check_split(model, segments, test_input):
-        raise Exception(
-            f"Result of split model on {test_input} does not match model."
-        )
+        all_model_layers = list(iter_layers(sub_model))
 
-    return segments
+        segments = []
+        for i, (start, end) in enumerate(segment_indices):
+            segment_layers = all_model_layers[start:end]
+            segment = model_wrap(segment_layers)
+
+            if saver:
+                segment_id = f"{node_id}_{i}_{len(segment_indices)}"
+                parent_result = get_parent_result(node_name, connections, saver_results)
+                saver_results[node_name] = saver(
+                    segment, save_root, segment_id, parent_result
+                )
+            segments.append(segment)
+
+        test_input = np.random.rand(1, *segments[0].input_shape[1:])
+        if not check_split(sub_model, segments, test_input):
+            raise Exception(
+                f"Result of split model on {test_input} does not match model."
+            )
+        blocks[node_name] = segment
+
+    return blocks
 
 
 def tiny_model_func(input_shape, num_outputs=1):
