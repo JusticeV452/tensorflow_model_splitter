@@ -584,6 +584,23 @@ def segment_branching_model(model: keras.Model):
 
 
 def lateral_input_split(model: keras.Model, keras_input: keras.Input):
+    """
+    Split the input layer of a simple sequential, functional keras model
+
+    Parameters
+    ----------
+    model : keras.Model
+        Functional purely sequential model.
+    keras_input : keras.Input
+        Size of input that will be split.
+
+    Returns
+    -------
+    new_model : keras.Model
+        Model with two inputs, the first input being the first half of the
+        original model's input. The second input being the second half
+
+    """
     input_shape = list(keras_input.shape)
     assert input_shape[-1] % 2 == 0
     input_shape[-1] = keras_input.shape[-1] // 2
