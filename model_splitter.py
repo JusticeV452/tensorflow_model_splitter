@@ -15,22 +15,114 @@ from nnom.scripts.nnom_utils import generate_model
 SIZE_UNITS = ['B', "KB", "MB", "GB", "TB"]
 KiB = 1024
 DEFAULT_OUTPUT_FOLDER = "outputs"
+def is_input_layer(layer: kl.Layer):
+    """
+    Check if layer is an input layer
+
+    Parameters
+    ----------
+    layer : kl.Layer
+
+    Returns
+    -------
+    bool
+        True if layer is an input layer, False otherwise.
+
+    """
+    return "input" in layer.name
+
+
+def get_input_list(model: keras.Model | kl.Layer):
+    """
+    Return list of model/layer's inputs
+
+    Parameters
+    ----------
+    model : keras.Model | kl.Layer
+
+    Returns
+    -------
+    inputs : list
+        List of keras_tensors.
+
+    """
+    inputs = model.input
+    if not isinstance(inputs, list):
+        inputs = [inputs]
+    return inputs
+
+
+def is_activation_layer(layer: kl.Layer):
+    """
+    Check if layer is an activation layer
+
+    Parameters
+    ----------
+    layer : kl.Layer
+
+    Returns
+    -------
+    bool
+        True if layer is an activatin layer, False otheriwse.
+
+    """
+    cls_str = str(type(layer))
+    return any(
+        activ_indicator in cls_str
+        for activ_indicator in [
+            "layers.activation",
+            "layers.core.activation"
+        ]
+    )
+
+
+def is_branching_model(model: keras.Model):
+    """
+    Check if there are multiple input branches in a model
+
+    Parameters
+    ----------
+    model : keras.Model
+        Tensorflow funcitonal model.
+
+    Returns
+    -------
+    bool
+        True if model contains branches/parallel steps,
+        False otherwise (purely sequential).
+
+    """
+    return len([
+        layer for layer in iter_layers(model)
+        if is_input_layer(layer)
+    ]) > 1
 
 
 def clone_layer(layer, seed=1337, **config_vars):
+    """
+    Clone tensorflow layer
+
+    Parameters
+    ----------
+    layer : kl.Layer
+    seed : int, optional
+        Random seed. The default is 1337.
+    config_vars : dict
+        Config parameters to override when cloning layer.
+
+    Returns
+    -------
+    new_layer : kl.Layer
+        Clone of input layer.
+
+    """
     # https://www.tensorflow.org/api_docs/python/tf/keras/models/clone_model
     config = layer.get_config()
     config.update(config_vars)
     if seed is not None and "seed" in config:
         config["seed"] = seed
     new_layer = layer.__class__.from_config(config)
-    # if hasattr(layer, "weights"):
-    #     new_layer.set_weights(copy.deepcopy(layer.weights))
     return new_layer
-
-
-def is_input_layer(layer):
-    return "input" in layer.name
 
 
 def check_split(model, segments, inp):
