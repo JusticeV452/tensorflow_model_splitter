@@ -441,7 +441,10 @@ def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
     return model
 
 
-def group_layers(layers, independent_activations=False):
+def group_layers(layers: list | keras.Model, independent_activations=False):
+    if isinstance(layers, keras.Model):
+        layers = list(iter_layers(layers))
+
     groups = []
     current_group = []
     for layer in layers:
