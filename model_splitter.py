@@ -102,6 +102,8 @@ class SegmentedModel:
             return False
         return True
 
+    def extend(self, splitter):
+        return extend_segemented_model(self, splitter)
 
 
 def addr(obj: object):
@@ -788,8 +790,75 @@ def segment_branching_model(model: keras.Model):
     return {
         "nodes": {block[0].name: block for block in blocks},
         "connections": connections
+
+
+def extend_segemented_model(model: SegmentedModel, splitter):
+    nodes, connections = model
+    if not isinstance(splitter, dict):
+        splitter = {key: splitter for key in nodes}
+    splitter_dict = {
+        key: split_by_num_segments(s) if isinstance(s, int) else s
+        for key, s in splitter.items()
     }
 
+    def get_node_name(base_name, prev_len, idx):
+        return (
+            (base_name[0], base_name[1] + prev_len + idx)
+            if type(base_name) is tuple else
+            ((base_name, idx) if idx > 0 else base_name)
+        )
+
+    core_segment_lengths = {}
+    def get_prev_len(node_name):
+        core_segment_name = node_name[0] if type(node_name) is tuple else node_name
+        core_segment_lengths.setdefault(core_segment_name, [])
+        segment_lengths = core_segment_lengths[core_segment_name]
+        return (
+            core_segment_name,
+            sum(segment_lengths) - len(segment_lengths)
+        )
+
+    new_nodes = {}
+    new_connections = {}
+    num_segments = {}
+
+    for node_name, layers in nodes.items():
+        core_segment_name, prev_len = get_prev_len(node_name)
+        if core_segment_name in core_segment_lengths:
+            segment_name = get_node_name(node_name, prev_len - 1, 0)
+            conn_name = (
+                (segment_name,), (get_node_name(node_name, prev_len - 1, 1),)
+            )
+            new_connections[conn_name] = None
+
+        segment_sizes = splitter_dict[node_name](layers)
+        segment_indices = [
+            (prev_sum := sum(segment_sizes[:i]), prev_sum + segment_sizes[i])
+            for i in range(len(segment_sizes))
+        ]
+        for i, (start, end) in enumerate(segment_indices):
+            # segment_id = f"_{i}" if i > 0 else ""
+            segment_name = get_node_name(node_name, prev_len, i)
+            new_nodes[segment_name] = layers[start:end]
+            if i < len(segment_indices) - 1:
+                conn_name = (
+                    (segment_name,),
+                    (get_node_name(node_name, prev_len, i + 1),)
+                )
+                new_connections[conn_name] = None
+        num_segments[node_name] = len(segment_indices)
+        core_segment_lengths[core_segment_name].append(num_segments[node_name])
+
+    for (inputs, outputs), merge_func in connections.items():
+        # Skip connections added to link split segments
+        if len(inputs) == 1 and len(outputs) == 1:
+            continue
+        new_inputs = tuple(
+            get_node_name(inp, 0, get_prev_len(inp)[1])
+            for inp in inputs
+        )
+        new_connections[(new_inputs, outputs)] = merge_func
+    return SegmentedModel(new_nodes, new_connections)
 
 
 def lateral_input_split(model: keras.Model, keras_input: keras.Input):
