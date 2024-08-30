@@ -661,7 +661,7 @@ def get_prev_layer(keras_tensor):
     return keras_tensor._keras_history.layer
 
 
-def get_segment_ids(node_names, connections):
+def get_segment_ids(node_names, connections=None):
     """
     
 
@@ -678,42 +678,82 @@ def get_segment_ids(node_names, connections):
         DESCRIPTION.
 
     """
+    if connections is None:
+        node_names, connections = format_node_connections(node_names)
+    if isinstance(node_names, dict):
+        node_names = node_names.keys()
+
     segment_ids = {}
-    connections_list = list(connections)
-    last_level_outputs = set()
-    all_layer_inputs = set(inp for inputs, _ in connections for inp in inputs)
+    
+    # Create connections list and get unsegmented node sizes
+    node_sizes = {}
+    connections_list = []
+    for conn in connections:
+        inputs, outputs = conn
+        # Skip connections linking segments in the same block
+        if len(inputs) == 1 and len(outputs) == 1:
+            group_name, _ = (
+                (inputs[0], 0) if isinstance(inputs[0], str) else inputs[0]
+            )
+            node_sizes.setdefault(group_name, 0)
+            node_sizes[group_name] += 1
+            continue
+        inputs = tuple(
+            inp[0] if isinstance(inp, list | tuple)
+            else inp for inp in inputs
+        )
+        connections_list.append((inputs, outputs))
+
+    all_layer_inputs = set(
+        inp for inputs, _ in connections_list for inp in inputs
+    )
+    
+    depth = 0
+    group_id = 0
+    def update_segment_ids(node_names, outputs=False):
+        for row_id, node_name in enumerate(node_names):
+            if outputs and node_name in all_layer_inputs:
+                continue
+            d = depth + int(outputs)
+            segment_ids[node_name] = f"{d}_{group_id}_{row_id}_0"
+            for s in range(node_sizes.get(node_name, 0)):
+                segment_ids[(node_name, s + 1)] = f"{d}_{group_id}_{row_id}_{s + 1}"
+
     while connections_list:
+        # Find connections that do not use ouptuts of remaining connection
         found_parent = False
+        group = []
         for i in range(len(connections_list)):
             found_parent = False
             inputs, outputs = connections_list[i]
             for j in range(len(connections_list)):
-                if j == i:
-                    continue
+                if j == i: continue
+                # Check if connection's inputs contains a segment name that
+                # is an output of any remaining connections
                 other_inputs, other_outputs = connections_list[j]
-                if any(inp in set(other_outputs) | last_level_outputs for inp in inputs):
+                if any(inp in set(other_outputs) for inp in inputs):
                     found_parent = True
                     break
-            if not found_parent:
-                break
-        if found_parent:
-            last_level_outputs = set()
-            continue
-        last_group_id = 0
-        for k, inp in enumerate(inputs):
-            segment_ids[inp] = f"{len(connections) - len(connections_list)}_{k}"
-            last_group_id = k
-        for k, out in enumerate(outputs):
-            if out not in all_layer_inputs:
-                last_group_id += 1
-                segment_ids[out] = f"{len(connections) - len(connections_list)}_{last_group_id}"
-        last_level_outputs.update(outputs)
-        connections_list.pop(i)
+            # If connection is a child of another connection check next connection
+            if found_parent: continue
+            group.append((i, inputs, outputs))
+
+        for c, inputs, outputs in group:
+            update_segment_ids(inputs)
+            update_segment_ids(outputs, outputs=True)
+            group_id += 1
+
+        for i, (c, *_) in enumerate(group):
+            connections_list.pop(c - i)
+        depth += 1
+
     # Model has no branches
     if not segment_ids:
         for i, node_name in enumerate(node_names):
-            segment_ids[node_name] = f"0_{i}"
-    assert len(segment_ids) == len(node_names), f"{len(segment_ids)} != {len(node_names)}"
+            segment_ids[node_name] = f"0_0_0_{i}"
+    assert len(segment_ids) == len(node_names), (
+        f"{len(segment_ids)} != {len(node_names)}"
+    )
     return segment_ids
 
 
