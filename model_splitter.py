@@ -787,9 +787,9 @@ def segment_branching_model(model: keras.Model):
         if single_input:
             add_to_parent_blocks(layer, inputs)
         seen.add(addr(layer))
-    return {
-        "nodes": {block[0].name: block for block in blocks},
-        "connections": connections
+    return SegmentedModel(
+        {block[0].name: block for block in blocks}, connections
+    )
 
 
 def extend_segemented_model(model: SegmentedModel, splitter):
