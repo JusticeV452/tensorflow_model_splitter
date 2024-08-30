@@ -18,9 +18,90 @@ KiB = 1024
 DEFAULT_OUTPUT_FOLDER = "outputs"
 
 
-class SegmentedModel(TypedDict):
-    nodes: Dict[str, list]
-    connections: Dict[tuple, str]
+def format_node_connections(nodes, connections=None):
+    if isinstance(nodes, keras.Model):
+        nodes, connections = segment_branching_model(nodes)
+    elif isinstance(nodes, SegmentedModel):
+        connections = copy.deepcopy(nodes.connections)
+        nodes = copy.deepcopy(nodes.nodes)
+    return nodes, connections
+
+class SegmentedModel:
+    def __init__(self, nodes, connections=None):
+        if not connections:
+            assert isinstance(nodes, keras.Model | SegmentedModel)
+            nodes, connections = format_node_connections(nodes)
+        self.nodes = nodes
+        self.connections = connections
+        self.last_intermediates = None
+
+    @property
+    def input_names(self):
+        return [node_name for node_name in self.nodes if "input" in node_name]
+
+    def __repr__(self):
+        return repr(self.to_dict())
+
+    def __str__(self):
+        return str(self.to_dict())
+    
+    def __iter__(self):
+        return iter((self.nodes, self.connections))
+
+    def __eq__(self, other):
+        if not isinstance(other, SegmentedModel):
+            return False
+        return self.nodes == other.nodes, self.connections == other.connections
+
+    def to_dict(self):
+        return {"nodes": self.nodes, "connections": self.connections}
+
+    def random_input(self):
+        inps = []
+        for inp_name in self.input_names:
+            segment = self.nodes[inp_name]
+            keras_inp = (
+                segment[0].input if isinstance(segment, list)
+                else segment.input
+            )
+            inps.append(np.random.rand(1, *keras_inp.shape[1:]))
+        return inps
+
+    def __call__(self, *inps):
+        if len(inps) == 1 and isinstance(inps[0], list | tuple | dict):
+            inps = inps[0]
+        inp_dict = inps
+        if not isinstance(inp_dict, dict):
+            inp_dict = {
+                layer_name: arr
+                for layer_name, arr in zip(self.input_names, inps)
+            }
+        intermediate_results = {}
+        node_ids = get_segment_ids(self.nodes.keys(), self.connections)
+        for node_name, node_id in node_ids.items():
+            parent_result = get_parent_result(
+                node_name, self.connections, intermediate_results,
+                default_func=lambda node_name: inp_dict[node_name]
+            )
+            segment = self.nodes[node_name]
+            if isinstance(segment, list):
+                segment = model_wrap(segment)
+            intermediate_results[node_name] = segment(parent_result)
+        self.last_intermediates = intermediate_results
+        return intermediate_results[node_name]
+
+    def func_eq(self, other):
+        if not isinstance(other, keras.Model | SegmentedModel):
+            return False
+        if isinstance(other, SegmentedModel):
+            inp = self.random_input()
+            return np.allclose(self(inp), other(inp))
+        try:
+            check_segment_split(other, self.nodes, self.connections)
+        except:
+            return False
+        return True
+
 
 
 def addr(obj: object):
@@ -178,16 +259,8 @@ def check_segment_split(model, segments_dict, connections, inps=None):
         inps = [np.random.rand(1, *layer.shape[1:]) for layer in inp_list]
     expected = model(inps).numpy()
     inp_dict = {layer.name: arr for layer, arr in zip(inp_list, inps)}
-    intermediate_results = {}
-    node_ids = get_segment_ids(segments_dict.keys(), connections)
-    for node_name, node_id in node_ids.items():
-        parent_result = get_parent_result(
-            node_name, connections, intermediate_results,
-            default_func=lambda node_name: inp_dict[node_name]
-        )
-        segment = segments_dict[node_name]
-        intermediate_results[node_name] = segment(parent_result)
-    assert np.array_equal(intermediate_results[node_name], expected)
+    pred = SegmentedModel(segments_dict, connections)(inp_dict)
+    assert np.array_equal(pred, expected)
 
 
 class BaseModel(keras.Model):
