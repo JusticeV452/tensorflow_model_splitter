@@ -932,7 +932,8 @@ def lateral_input_split(model: keras.Model, keras_input: keras.Input):
             outputs=clone_layer(
                 split_layer,
                 name=split_layer.name + f"_{i}",
-                activation=None)(inp))
+                activation=None
+            )(inp))
         for i, inp in enumerate(split_inputs)
     ]
     outputs = kl.Add()([m.output for m in layer_parts])
@@ -1007,56 +1008,30 @@ def split_model(
         if save_name is None else save_name
     )
 
-    if isinstance(splitter, int):
-        splitter = split_by_num_segments(splitter)
-
-    if not isinstance(splitter, dict):
-        splitter = {key: splitter for key in model["nodes"]}
-
     blocks = {}
     saver_results = {}
-    connections = model["connections"]
-    node_ids = get_segment_ids(model["nodes"].keys(), connections)
+    nodes, connections = model.extend(splitter)
+    node_ids = get_segment_ids(nodes.keys(), connections)
 
     if saver:
         save_root = os.path.join(output_folder, save_name)
         os.makedirs(save_root, exist_ok=True)
+    
+    # Generate intermediate results
 
     for node_name, node_id in node_ids.items():
-        sub_model_layers = model["nodes"][node_name]
-        sub_model = model_wrap(sub_model_layers)
-        segment_sizes = splitter[node_name](sub_model)
-
-        segment_indices = [
-            (prev_sum := sum(segment_sizes[:i]), prev_sum + segment_sizes[i])
-            for i in range(len(segment_sizes))
-        ]
-
-        all_model_layers = list(iter_layers(sub_model))
-
-        segments = []
-        for i, (start, end) in enumerate(segment_indices):
-            segment_layers = all_model_layers[start:end]
-            segment = model_wrap(segment_layers)
-
-            if saver:
-                segment_id = f"{node_id}_{i}_{len(segment_indices)}"
-                parent_result = get_parent_result(node_name, connections, saver_results)
-                saver_results[node_name] = saver(
-                    segment, save_root, segment_id, parent_result
-                )
-            segments.append(segment)
-
-        test_input = np.random.rand(1, *segments[0].input_shape[1:])
-        if not check_split(sub_model, segments, test_input):
-            raise Exception(
-                f"Result of split model on {test_input} does not match model."
-            )
+        segment = nodes[node_name]
+        if isinstance(segment, list):
+            segment = model_wrap(segment)
+        parent_result = get_parent_result(node_name, connections, saver_results)
+        saver_results[node_name] = saver(
+            segment, save_root, node_id, parent_result
+        )
         blocks[node_name] = segment
     if isinstance(orig_model, keras.Model):
         check_segment_split(orig_model, blocks, connections)
 
-    return blocks
+    return SegmentedModel(blocks, connections)
 
 
 def tiny_model_func(input_shape, num_outputs=1):
