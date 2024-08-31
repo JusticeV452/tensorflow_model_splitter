@@ -1028,10 +1028,10 @@ def split_model(
             segment, save_root, node_id, parent_result
         )
         blocks[node_name] = segment
-    if isinstance(orig_model, keras.Model):
-        check_segment_split(orig_model, blocks, connections)
 
-    return SegmentedModel(blocks, connections)
+    result_model = SegmentedModel(blocks, connections)
+    assert result_model.func_eq(orig_model)
+    return result_model
 
 
 def tiny_model_func(input_shape, num_outputs=1):
