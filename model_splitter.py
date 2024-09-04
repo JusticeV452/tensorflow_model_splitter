@@ -11,7 +11,7 @@ from typing import Callable, List, Dict, TypedDict
 from tinymlgen import port as get_c_code
 from tensorflow.keras import layers as kl
 
-from nnom.scripts.nnom_utils import generate_model
+from nnom_utils import generate_model
 
 SIZE_UNITS = ['B', "KB", "MB", "GB", "TB"]
 KiB = 1024
