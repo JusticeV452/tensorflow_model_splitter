@@ -3,7 +3,8 @@
 // #include <SoftwareSerial.h>
 #include <HardwareSerial.h>
 
-#define STM32C0116_DK
+{{DEVICE_NAME_DEF}}
+{{REDUCE_TYPE}}
 #if defined(MULT_REDUCE)
   const int8_t INPUT_FILL_VALUE = 1;
   int8_t reduce(int8_t v1, int8_t v2) { return v1 * v2; }
@@ -14,7 +15,7 @@
 // Specific device config
 const int PRIMARY_ID = {{PRIMARY_ID}};
 const int SECONDARY_ID = {{SECONDARY_ID}};
-const bool IS_CONCAT = {{IS_CONCAT}};
+const bool IS_MULTI_INPUT = {{IS_MULTI_INPUT}};
 const int NUM_THRESHOLDS = {{NUM_THRESHOLDS}};
 const int INPUT_THRESHOLDS[] = {{INPUT_THRESHOLDS}};
 
@@ -118,7 +119,7 @@ int updateInput() {
   } while (data != -1);
 
   // Signal next device
-  if (IS_CONCAT && thresholdIndex < NUM_THRESHOLDS - 1 && inputLength == INPUT_THRESHOLDS[thresholdIndex]) {
+  if (IS_MULTI_INPUT && thresholdIndex < NUM_THRESHOLDS - 1 && inputLength == INPUT_THRESHOLDS[thresholdIndex]) {
     thresholdIndex++;
     Serial.write(1);
   }
@@ -161,7 +162,7 @@ void loop() {
 
     // May function incorrectly if Serial port on CONCAT device is used for printing
     int serialAvailable = Serial.available();
-    if (!IS_CONCAT && serialAvailable > 0) {
+    if (!IS_MULTI_INPUT && serialAvailable > 0) {
       while (Serial.read() != -1) {}; // Empty Serial of all data
       // Try to distinguish between irrelevant prints and signals to send data
       if (serialAvailable == 1) { dataBeforeWrite += 1; }
