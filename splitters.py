@@ -36,7 +36,7 @@ def split_by_num_segments(num_segments: int, independent_activations=False):
         layers_per_segment = len(layers) / num_segments
         smallest_group = min(grouped_layers, key=len)
         assert layers_per_segment >= len(smallest_group), (
-            "Not enough layers for {num_segments} segements when "
+            f"Not enough layers for {num_segments} segements when "
             f"smallest group is size {len(smallest_group)}"
         )
 
