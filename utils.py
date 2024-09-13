@@ -243,12 +243,14 @@ def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
     outputs = inputs
     last_non_activ_name = None
     for layer in layers:
-        assert not is_input_layer(layer), "Input layers are only accepted as first layer in `layers`"
+        assert not is_input_layer(layer), (
+            "Input layers are only accepted as first layer in `layers`"
+        )
         is_activ_layer = is_activation_layer(layer)
 
         # Copy layers to avoid disconnected graph error
         config_update = {}
-        if not is_activ_layer:
+        if getattr(layer, "weights", []):
             config_update["activation"] = None
         layer_clone = clone_layer(layer, **config_update)
         outputs = layer_clone(outputs)
