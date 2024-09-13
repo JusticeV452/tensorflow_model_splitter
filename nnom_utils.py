@@ -14,9 +14,8 @@ import tensorflow.keras as keras
 from tensorflow.keras import layers as kl
 from tensorflow.keras.models import Model
 from nnom.scripts.nnom_utils import (
-    is_shift_layer, is_shift_fixed, convert_to_x4_q7_weights, fuse_bn_to_conv,
-    generate_weights as nnom_generate_weights, generate_model,
-    layers_output_ranges as nnom_layers_output_ranges
+    is_shift_layer, is_shift_fixed, convert_to_x4_q7_weights,
+    fuse_bn_to_conv, generate_model,
 )
 
 from utils import is_input_layer
@@ -180,7 +179,7 @@ def layers_output_ranges(model, x_test, quantize_method="max_min", calibrate_siz
     np.random.shuffle(x_test)
     if x_test.shape[0] > calibrate_size:
         x_test = x_test[:calibrate_size]
-    
+
     shift_list = make_initial_shift_list(
         model, x_test,
         quantize_method=quantize_method, verbose=verbose
@@ -238,7 +237,7 @@ def generate_weights(
     # Quantize weights to 8-bits using (min,max) and write to file
     f = io.StringIO()
     f.write('#include "nnom.h"\n\n')
-    
+
     if type(x_test) is type(None):
         shift_list = None
     else:
@@ -275,7 +274,7 @@ def generate_weights(
         weight_dec_shift = 0
         if verbose:
             print('weights for layer', layer.name)
-        
+
         layer_quantize_info[layer.name] = {}
         layer_weights[layer.name] = {}
         for var in layer.weights:
@@ -283,7 +282,7 @@ def generate_weights(
             is_kernel = "kernel" in var_name
             if not is_kernel and "bias" not in var_name:
                 continue
-            
+
             var_values = var.numpy()
             min_value = np.min(var_values)
             max_value = np.max(var_values)
@@ -295,7 +294,7 @@ def generate_weights(
                 print(f" {'weight' if is_kernel else 'bias'}:", var_name)
                 print("  original shape: ", var_values.shape)
                 print("  dec bit", dec_bits)
-            
+
             bSameAsKernel = False
             if is_shift_layer(layer):
                 assert shift_list, f"Layer {layer.name} is classified as a shift layer so shift_list is required."
@@ -307,7 +306,7 @@ def generate_weights(
                     shift = input_encoding + weight_dec_shift - dec_bits
                     if shift < 0:
                         bSameAsKernel = True
-            
+
             if shift_list is None or bSameAsKernel:
                 # check if bias shift > weight shift, then reduce bias shift to weight shift
                 if is_kernel:
@@ -328,7 +327,7 @@ def generate_weights(
             layer_weights[layer.name][int(not is_kernel)] = var_values
             var_name = var_name.replace('/', '_').replace(':', '_')
             f.write("#define " + var_name.upper() + " {")
-            
+
             # CHW format
             if "chw" in format:
                 if is_kernel and "dense" in var_name:
@@ -350,7 +349,7 @@ def generate_weights(
                     transposed_wts = np.transpose(var_values)
             if verbose:
                 print("  reshape to:", transposed_wts.shape)
-            
+
             f.write(np.array2string(
                 transposed_wts.flatten(),
                 separator=", ",
@@ -364,22 +363,20 @@ def generate_weights(
                 f.write("\n")
     return f, layer_weights, layer_quantize_info, shift_list
 
-def quantize_model(model, x_test):
-    shift_list = layers_output_ranges(model, x_test)
-    
+
 def generate_model(model, x_test, name='weights.h', format='hwc', quantize_method='max_min', verbose=False):
     f, *_, shift_list = generate_weights(model, x_test=x_test, format=format, quantize_method=quantize_method, verbose=verbose)
-    
+
     model_layers = model.layers
     if not is_input_layer(model.layers[0]):
         model_layers = [model.input] + model_layers
 
     def get_iname(layer):
         return layer.name.replace(':', '/').split('/')[0]
-    
+
     def to_cpp_var_name(layer_name):
         return layer_name.upper().replace('/', '_').replace(':', '_')
-    
+
     def is_skipable_layer(layer):
         # FIXME: add more that could be skiped
         # flatten layer can be skipped in HWC but have to present in CHW
@@ -429,7 +426,7 @@ def generate_model(model, x_test, name='weights.h', format='hwc', quantize_metho
             f.write(f"#if {iname}_OUTPUT_RSHIFT < 0\n#error {iname}_OUTPUT_RSHIFT must be bigger than 0\n#endif\n")
 
     ID = 0
-    LI = {}    
+    LI = {}
     f.write('\n/* weights for each layer */\n')
     for layer_id, layer in enumerate(model_layers):
         if is_skipable_layer(layer):
@@ -452,28 +449,28 @@ def generate_model(model, x_test, name='weights.h', format='hwc', quantize_metho
             elif "BIAS" in var_name:
                 f.write(f"static const int8_t {layer.name}_bias[] = {var_name};\n")
                 f.write('static const nnom_bias_t %s_b = { (const void*)%s_bias, %s_BIAS_LSHIFT};\n' % (layer.name, layer.name, layer.name.upper()))
-    
+
     f.write("\n/* nnom model */\n")
     # FIXME: now only support one input and one output
     sz = 1
     for d in model.input.shape[1:]:
         sz *= d
-    f.write(f"const int INPUT_LENGTH = {sz};\n")
+    f.write(f"const int{'8_t' if sz < 128 else ''} INPUT_LENGTH = {sz};\n")
     f.write("static int8_t nnom_input_data[INPUT_LENGTH];\n")
     sz = 1
     for d in model.output.shape[1:]:
         sz *= d
-    f.write(f"const int OUTPUT_LENGTH = {sz};\n")
+    f.write(f"const int{'8_t' if sz < 128 else ''} OUTPUT_LENGTH = {sz};\n")
     f.write("static int8_t nnom_output_data[OUTPUT_LENGTH];\n")
     f.write("static nnom_model_t* nnom_model_create(void)\n{\n")
     f.write("\tstatic nnom_model_t model;\n")
-    
+
     if ID > 32:
         f.write(f"\tnnom_layer_t ** layer = malloc(sizeof(nnom_layer_t *)*{ID + 1});\n")
         f.write("\tif(NULL == layer) return NULL;\n")
     else:
         f.write(f"\tnnom_layer_t* layer[{ID + 1}];\n")
-    
+
     f.write("\n\tnew_model(&model);\n\n")
     for layer in model_layers:
         if is_skipable_layer(layer):
@@ -508,7 +505,7 @@ def generate_model(model, x_test, name='weights.h', format='hwc', quantize_metho
             conv_type = "Conv2D"
             if is_depthwise:
                 conv_type = "DW_" + conv_type
-            
+
             # Expand kernel, stride, and dilation for 1D conv
             kernel, stride, dilation = pad_filter_sizes(
                 cfg['kernel_size'], cfg['strides'], cfg['dilation_rate']
@@ -594,7 +591,7 @@ def generate_model(model, x_test, name='weights.h', format='hwc', quantize_metho
             f.write(f"\tlayer[{layer_id}] = model.hook(Softmax(), layer[{LI[inp][0]}]);\n")
         else:
             raise Exception("unsupported layer", layer.name, layer)
-			
+
         # # temporary fixed for activations attached into layers in construction
         # def is_activation_attached(layer):
         #     if(("Softmax" in layer.output.name and "softmax" not in layer.name)or
