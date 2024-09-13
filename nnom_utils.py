@@ -356,7 +356,7 @@ def generate_weights(
                 separator=", ",
                 threshold=transposed_wts.size,
                 formatter={"all": lambda x: str(int(x))}
-            ).strip("[]"))
+            ).strip("[]").replace('\n', ''))
             # transposed_wts.tofile(f, sep=", ", format="%d")
             f.write("}\n\n")
             f.write(f"#define {var_name.upper()}_SHIFT ({dec_bits})\n\n")
