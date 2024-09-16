@@ -571,9 +571,9 @@ def generate_model(model, x_test, name='weights.h', format='hwc', quantize_metho
             f.write(f"\tlayer[{layer_id}] = model.hook(Flatten(), layer[{LI[inp][0]}]);\n")
         elif any(merge_name in layer.name for merge_name in ["concatenate", "add", "subtract", "multiply"]):
             inps = [get_iname(input) for input in layer.input]
-            inX = sum([f" ,layer[{LI[inp][0]}]" for inp in inps], start="")
+            inX = ", ".join([f"layer[{LI[inp][0]}]" for inp in inps])
             if "concatenate" in layer.name:
-                f.write(f"\tlayer[{layer_id}] = model.mergex(Concat({cfg['axis']}), {len(inps)}{inX});\n")
+                f.write(f"\tlayer[{layer_id}] = model.mergex(Concat({cfg['axis']}), {len(inps)}, {inX});\n")
             else:
                 func_name = "Mult" if "multiply" in layer.name else layer.name[:3].capitalize()
                 if func_name == "Mult":
