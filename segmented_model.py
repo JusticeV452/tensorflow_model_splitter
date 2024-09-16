@@ -136,7 +136,7 @@ class SegmentedModel:
 
         for node_name, layers in nodes.items():
             core_segment_name, prev_len = get_prev_len(node_name)
-            if core_segment_name in core_segment_lengths:
+            if prev_len > 0 and core_segment_name in core_segment_lengths:
                 segment_name = get_node_name(node_name, prev_len - 1, 0)
                 conn_name = (
                     (segment_name,), (get_node_name(node_name, prev_len - 1, 1),)
