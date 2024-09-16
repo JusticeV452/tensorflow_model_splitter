@@ -44,7 +44,7 @@ class SegmentedModel:
 
     def __str__(self):
         return str(self.to_dict())
-    
+
     def __iter__(self):
         return iter((self.nodes, self.connections))
 
@@ -56,7 +56,7 @@ class SegmentedModel:
     def to_dict(self):
         return {"nodes": self.nodes, "connections": self.connections}
 
-    def random_input(self):
+    def make_input(self, input_gen=np.random.rand):
         inps = []
         for inp_name in self.input_names:
             segment = self.nodes[inp_name]
@@ -64,7 +64,7 @@ class SegmentedModel:
                 segment[0].input if isinstance(segment, list)
                 else segment.input
             )
-            inps.append(np.random.rand(1, *keras_inp.shape[1:]))
+            inps.append(input_gen(1, *keras_inp.shape[1:]))
         return inps
 
     def __call__(self, *inps):
@@ -94,8 +94,10 @@ class SegmentedModel:
         if not isinstance(other, keras.Model | SegmentedModel):
             return False
         if isinstance(other, SegmentedModel):
-            inp = self.random_input()
-            return np.allclose(self(inp), other(inp))
+            rand_inp = self.make_input()
+            rand_allclose = np.allclose(self(rand_inp), other(rand_inp))
+            ones_inp = self.make_input(lambda *inps: np.ones((*inps,)))
+            return rand_allclose and np.allclose(self(ones_inp), other(ones_inp))
         try:
             check_segment_split(other, self.nodes, self.connections)
         except:
