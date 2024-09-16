@@ -28,7 +28,7 @@ def format_node_connections(nodes, connections=None):
 
 class SegmentedModel:
     def __init__(self, nodes, connections=None):
-        if not connections:
+        if connections is None:
             assert isinstance(nodes, keras.Model | SegmentedModel)
             nodes, connections = format_node_connections(nodes)
         self.nodes = nodes
@@ -51,7 +51,7 @@ class SegmentedModel:
     def __eq__(self, other):
         if not isinstance(other, SegmentedModel):
             return False
-        return self.nodes == other.nodes, self.connections == other.connections
+        return self.nodes == other.nodes and self.connections == other.connections
 
     def to_dict(self):
         return {"nodes": self.nodes, "connections": self.connections}
@@ -114,13 +114,13 @@ class SegmentedModel:
         def get_node_name(base_name, prev_len, idx):
             return (
                 (base_name[0], base_name[1] + prev_len + idx)
-                if type(base_name) is tuple else
+                if isinstance(base_name, tuple) else
                 ((base_name, idx) if idx > 0 else base_name)
             )
 
         core_segment_lengths = {}
         def get_prev_len(node_name):
-            core_segment_name = node_name[0] if type(node_name) is tuple else node_name
+            core_segment_name = node_name[0] if isinstance(node_name, tuple) else node_name
             core_segment_lengths.setdefault(core_segment_name, [])
             segment_lengths = core_segment_lengths[core_segment_name]
             return (
@@ -268,7 +268,7 @@ def get_segment_ids(node_names, connections=None):
         node_names = node_names.keys()
 
     segment_ids = {}
-    
+
     # Create connections list and get unsegmented node sizes
     node_sizes = {}
     connections_list = []
@@ -291,7 +291,7 @@ def get_segment_ids(node_names, connections=None):
     all_layer_inputs = set(
         inp for inputs, _ in connections_list for inp in inputs
     )
-    
+
     depth = 0
     group_id = 0
     def update_segment_ids(node_names, outputs=False):
@@ -307,19 +307,19 @@ def get_segment_ids(node_names, connections=None):
         # Find connections that do not use ouptuts of remaining connection
         found_parent = False
         group = []
-        for i in range(len(connections_list)):
+        for i, (inputs, outputs) in enumerate(connections_list):
             found_parent = False
-            inputs, outputs = connections_list[i]
-            for j in range(len(connections_list)):
-                if j == i: continue
+            for j, (_, other_outputs) in enumerate(connections_list):
+                if j == i:
+                    continue
                 # Check if connection's inputs contains a segment name that
                 # is an output of any remaining connections
-                other_inputs, other_outputs = connections_list[j]
                 if any(inp in set(other_outputs) for inp in inputs):
                     found_parent = True
                     break
             # If connection is a child of another connection check next connection
-            if found_parent: continue
+            if found_parent:
+                continue
             group.append((i, inputs, outputs))
 
         for c, inputs, outputs in group:
