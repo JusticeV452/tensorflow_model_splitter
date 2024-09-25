@@ -1,8 +1,11 @@
 import numpy as np
 import tensorflow.keras as keras
+
 from tensorflow.keras import layers as kl
+from nnom.scripts.nnom_utils import is_input_layer
+
 from utils import (
-    clone_layer, is_input_layer, calc_model_size,
+    clone_layer, calc_model_size,
     iter_layers, group_layers, model_wrap
 )
 

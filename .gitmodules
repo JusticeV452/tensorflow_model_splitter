@@ -1,0 +1,3 @@
+[submodule "nnom"]
+	path = nnom
+	url = https://github.com/majianjia/nnom.git

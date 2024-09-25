@@ -4,26 +4,10 @@ import tensorflow as tf
 import tensorflow.keras as keras
 
 from tensorflow.keras import layers as kl
+from nnom.scripts.nnom_utils import is_input_layer
 
 SIZE_UNITS = ['B', "KB", "MB", "GB", "TB"]
 KiB = 1024
-
-
-def is_input_layer(layer: kl.Layer):
-    """
-    Check if layer is an input layer
-
-    Parameters
-    ----------
-    layer : kl.Layer
-
-    Returns
-    -------
-    bool
-        True if layer is an input layer, False otherwise.
-
-    """
-    return "input" in layer.name
 
 
 def is_activation_layer(layer: kl.Layer):
@@ -50,24 +34,6 @@ def is_activation_layer(layer: kl.Layer):
     )
 
 
-def get_input_list(model: keras.Model | kl.Layer):
-    """
-    Return list of model/layer's inputs
-
-    Parameters
-    ----------
-    model : keras.Model | kl.Layer
-
-    Returns
-    -------
-    inputs : list
-        List of keras_tensors.
-
-    """
-    inputs = model.input
-    if not isinstance(inputs, list):
-        inputs = [inputs]
-    return inputs
 
 
 def group_layers(layers: list | keras.Model, independent_activations=False):

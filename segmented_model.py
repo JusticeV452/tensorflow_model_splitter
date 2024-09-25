@@ -2,11 +2,9 @@ import copy
 import numpy as np
 import tensorflow.keras as keras
 
+from nnom.scripts.nnom_utils import is_input_layer, get_input_list
 from splitters import split_by_num_segments
-from utils import (
-    is_input_layer, iter_layers, get_input_list,
-    get_parent_result, model_wrap
-)
+from utils import iter_layers, get_parent_result, model_wrap
 
 
 def addr(obj: object):

@@ -1,15 +1,15 @@
 import os
+from datetime import datetime
+from typing import Callable, List, Dict
+
 import numpy as np
 import tensorflow as tf
 import tensorflow.keras as keras
 
-from datetime import datetime
-from typing import Callable, List, Dict
-
 from tinymlgen import port as get_c_code
 
-from utils import is_input_layer, iter_layers, get_parent_result, model_wrap
-from nnom_utils import generate_model
+from utils import iter_layers, get_parent_result, model_wrap
+from nnom_utils import is_input_layer, generate_model
 
 from segmented_model import get_segment_ids, SegmentedModel
 
