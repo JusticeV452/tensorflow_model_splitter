@@ -173,7 +173,7 @@ def get_parent_result(
     return connection_key, combined_parent_result
 
 
-def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
+def model_wrap(layers: list | tuple, suppress_warnings=False):
     """
     Wrap tf.Modules in keras.Model for saving with tinymlgen.port or
     tf.lite.TFLiteConverter.from_keras_model
@@ -193,7 +193,7 @@ def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
 
     """
 
-    if isinstance(layers, tf.Module):
+    if not isinstance(layers, list | tuple):
         layers = [layers]
 
     # Build inputs
@@ -247,6 +247,50 @@ def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):
         layer.set_weights(weights_dict[layer.name])
 
     return model
+
+
+def expand_activations(model):
+    layer_map = {}
+    inp_override = {}
+
+    def get_inp_iname(layer):
+        inp_name = layer.name.split('/')[0]
+        return inp_override.get(inp_name, inp_name)
+    def get_io(node, io_type):
+        elements = getattr(node, io_type)
+        if isinstance(elements, list):
+            elements = [layer_map[get_inp_iname(el)] for el in elements]
+        else:
+            elements = layer_map[get_inp_iname(elements)]
+        return elements
+
+    for layer in model.layers:
+        if is_input_layer(layer):
+            layer_map[layer.name] = keras.Input(shape=layer.input.shape[1:])
+            continue
+        inputs = get_io(layer, "input")
+        config_update = {}
+        if getattr(layer, "weights", []):
+            config_update["activation"] = None
+        layer_clone = clone_layer(layer, **config_update)
+        layer_map[layer_clone.name] = layer_clone(inputs)
+
+        if (activation := layer.get_config().get("activation")) and activation != "linear":
+            if isinstance(activation, str):
+                activation = kl.Activation(activation)
+            layer_map[activation.name] = activation(layer_map[layer_clone.name])
+            inp_override[layer_clone.name] = activation.name
+    ex_model = keras.Model(
+        inputs=get_io(model, "input"), 
+        outputs=get_io(model, "output")
+    )
+    # Copy weights from original layers to new model
+    weights_dict = {layer.name: layer.get_weights() for layer in model.layers}
+    for layer in ex_model.layers:
+        if is_input_layer(layer) or layer.name not in weights_dict:
+            continue
+        layer.set_weights(weights_dict[layer.name])
+    return ex_model
 
 
 def quantization_error(model, quantized_input, quantized_output, output_shift, input_shift=7):
