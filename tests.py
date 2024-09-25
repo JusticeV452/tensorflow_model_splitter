@@ -90,6 +90,26 @@ def multiinput_oneoutput(
     )
 
 
+def make_test_internal_branching_model():
+    inputA = keras.Input(shape=(20,))
+    # the first branch operates on the first input
+    x = kl.Dense(20, activation="relu")(inputA)
+    x = kl.Dense(20, activation="relu")(x)
+    # the second branch opreates on the second input
+    y = kl.Dense(20, activation="relu")(x)
+    z = kl.Dense(20, activation="relu")(x)
+    # combine the output of the two branches
+    combined = concatenate(y, z)
+    # apply a FC layer and then a regression prediction on the
+    # combined outputs
+    w = kl.Dense(20, activation="relu")(combined)
+    w = kl.Dense(20, activation="relu")(w)
+    w = kl.Dense(1, activation="linear")(w)
+    # our model will accept the inputs of the two branches and
+    # then output a single value
+    return keras.Model(inputs=inputA, outputs=w)
+
+
 class TestModelWrap(unittest.TestCase):
 
     def assertNpEqual(self, result, expected):
@@ -228,6 +248,25 @@ class TestSegmentedModel(unittest.TestCase):
         )
         # Model should be functionally equivalent
         self.assertTrue(segmented_model.func_eq(model))
+
+    def test_internal_branching(self):
+        # input -<>- output
+        model = make_test_internal_branching_model()
+        segmented_model = segment_branching_model(model)
+        inp_name = model.layers[0].name
+        left_branch = model.layers[3].name
+        right_branch = model.layers[4].name
+        out_name = model.layers[6].name
+        ex_connections = {
+            ((inp_name,), (left_branch, right_branch)): None,
+            ((left_branch, right_branch), (out_name,)): keras.layers.Concatenate
+        }
+        self.assertConnectionsEqual(
+            segmented_model.connections, ex_connections
+        )
+        self.assertNodesEqual(segmented_model.nodes, (
+            inp_name, left_branch, right_branch, out_name
+        ))
 
     def test_single_extend(self):
         model = multiinput_oneoutput(
