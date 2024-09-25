@@ -15,9 +15,10 @@
 // Specific device config
 const int PRIMARY_ID = {{PRIMARY_ID}};
 const int SECONDARY_ID = {{SECONDARY_ID}};
-const bool IS_MULTI_INPUT = {{IS_MULTI_INPUT}};
 const int NUM_THRESHOLDS = {{NUM_THRESHOLDS}};
 const int INPUT_THRESHOLDS[] = {{INPUT_THRESHOLDS}};
+const bool IS_MULTI_INPUT = NUM_THRESHOLDS > 0;
+const bool IS_RECURRENT = {{IS_RECURRENT}};
 
 // Shared device config
 const int ROOT_ID = {{ROOT_ID}};

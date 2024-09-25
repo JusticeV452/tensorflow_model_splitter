@@ -94,6 +94,8 @@ if __name__ == "__main__":
     parser.add_argument('-mn', '--model_name', type=str)
     parser.add_argument('-w', '--weights_path', type=str)
 
+    parser.add_argument('-pid', '--primary_id', type=int)
+    parser.add_argument('-sid', '--secondary_id', type=int, default=0)
     parser.add_argument('-rid', '--root_id', type=int, default=0)
     parser.add_argument('-tid', '--tail_id', type=int)
     parser.add_argument('-sd', '--start_device', type=int, default=0)
@@ -169,12 +171,13 @@ if __name__ == "__main__":
     model = get_model(args.module_path, args.gen_func_name, **gen_func_kwargs)
     if args.weights_path:
         model.load_weights(args.weights_path)
-    if args.model_name:
-        model._name = args.model_name
 
     # Split model with nnom
     num_segements = len(target_boards) if not args.tail_id else args.tail_id + 1
-    split_model(model, num_segements, saver=save_nnom_model)
+    upload_info, _ = split_model(
+        model, num_segements,
+        saver=save_nnom_model, save_name=args.model_name
+    )
 
     # copy each weight set into project dir and run
     for i, board in enumerate(target_boards):
@@ -198,13 +201,23 @@ if __name__ == "__main__":
             )
             content = content.replace(
                 "{{DEVICE_NAME_DEF}}",
-                ("#define " if device_name_def else "") + device_name_def
+                "" if not device_name_def else f"#define {device_name_def}"
             ).replace(
-                "{{ROOT_ID}}", str(args.root_id)
+                "{{REDUCE_TYPE}}", f"#define {upload_info['reduce_type']}_REDUCE"
+            ).replace(
+                "{{PRIMARY_ID}}", str(args.pid)
+            ).replace(
+                "{{SECONDARY_ID}}", str(args.sid)
+            ).replace(
+                "{{ROOT_ID}}", str(tail_id)
             ).replace(
                 "{{TAIL_ID}}", str(tail_id)
             ).replace(
-                "{{DEVICE_ID}}", str(device_id)
+                "{{NUM_THRESHOLDS}}", str(len(upload_info["input_thresholds"]))
+            ).replace(
+                "{{INPUT_THRESHOLDS}}", '{' + str(upload_info["input_thresholds"])[1:-1] + '}'
+            ).replace(
+                "{{ROW_SIZE}}", str(upload_info["row_size"])
             )
         with open(ino_path, 'w+', encoding="utf-8") as file:
             file.write(content)

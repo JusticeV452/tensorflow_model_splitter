@@ -158,7 +158,7 @@ def get_parent_result(
         default_func=lambda node_name: None):
     connection_key = get_connection_key(node_name, connections)
     if connection_key:
-        inputs, outputs = connection_key
+        inputs, _ = connection_key
         parent_results = [
             intermediate_results[parent_name]
             for parent_name in inputs
@@ -170,7 +170,7 @@ def get_parent_result(
         combined_parent_result = merge_func(parent_results)
     else:
         combined_parent_result = default_func(node_name)
-    return combined_parent_result
+    return connection_key, combined_parent_result
 
 
 def model_wrap(layers: tf.Module | list | tuple, suppress_warnings=False):

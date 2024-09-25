@@ -38,14 +38,6 @@ def is_branching_model(model: keras.Model):
     ]) > 1
 
 
-def check_split(model, segments, inp):
-    expected = model(inp).numpy()
-    segments_result = inp
-    for segment in segments:
-        segments_result = segment(segments_result)
-    return np.array_equal(expected, segments_result)
-
-
 def save_tflite_model(model, save_root, segment_id, _last_saver_result=None):
     """
     Export model to tflite file
@@ -71,6 +63,7 @@ def save_tflite_model(model, save_root, segment_id, _last_saver_result=None):
     # Save the model.
     with open(file_name, 'wb') as file:
         file.write(tflite_model)
+    return file_name, None
 
 
 def save_tinymlgen_model(model, save_root, segment_id, _last_saver_result=None):
@@ -95,6 +88,7 @@ def save_tinymlgen_model(model, save_root, segment_id, _last_saver_result=None):
     file_name = os.path.join(save_root, f"{save_name}_{segment_id}.h")
     with open(file_name, "w+", encoding="utf-8") as file:
         file.write(c_code)
+    return file_name, None
 
 
 def get_nnom_saver(init_test_set=None, num_samples=1000):
@@ -102,17 +96,15 @@ def get_nnom_saver(init_test_set=None, num_samples=1000):
         _, save_name = os.path.split(save_root)
         nnom_path = os.path.join(save_root, "nnom")
         os.makedirs(nnom_path, exist_ok=True)
-        if type(x_test) is type(None):
+        if isinstance(x_test, type(None)):
             x_test = (
                 init_test_set
-                if type(init_test_set) is not type(None)
+                if not isinstance(init_test_set, type(None))
                 else np.random.rand(num_samples, *model.input_shape[1:])
             )
-        generate_model(
-            model, x_test,
-            name=os.path.join(nnom_path, f"{save_name}_{segment_id}.h")
-        )
-        return model(x_test).numpy()
+        weights_path = os.path.join(nnom_path, f"{save_name}_{segment_id}.h")
+        generate_model(model, x_test, name=weights_path)
+        return weights_path, model(x_test).numpy()
     return save
 
 
@@ -162,13 +154,14 @@ def split_model(
     if isinstance(model, keras.Model):
         save_name = model.name if save_name is None else save_name
         model = SegmentedModel(model)
-        
+
     save_name = (
         "model_" + datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
         if save_name is None else save_name
     )
 
     blocks = {}
+    upload_info = {}
     saver_results = {}
     nodes, connections = model.extend(splitter)
     node_ids = get_segment_ids(nodes.keys(), connections)
@@ -176,18 +169,35 @@ def split_model(
     if saver:
         save_root = os.path.join(output_folder, save_name)
         os.makedirs(save_root, exist_ok=True)
-    
+
     # Generate intermediate results
     for node_name, node_id in node_ids.items():
         segment = nodes[node_name]
         if isinstance(segment, list):
             segment = model_wrap(segment)
-        parent_result = get_parent_result(node_name, connections, saver_results)
-        saver_results[node_name] = saver(
+        connection_key, parent_result = get_parent_result(node_name, connections, saver_results)
+        save_path, saver_results[node_name] = saver(
             segment, save_root, node_id, parent_result
         )
         blocks[node_name] = segment
+        input_thresholds = []
+        if connection_key:
+            inputs, _ = connection_key
+            input_sizes = [saver_results[inp_name][0].size for inp_name in inputs]
+            input_thresholds = [
+                sum(input_sizes[:i + 1]) for i in range(len(input_sizes))
+            ]
+        upload_info[node_id] = {
+            "save_path": save_path,
+            "reduce_type": (
+                "MULT"
+                if "merging.multiply" in str(type(connections.get(connection_key)))
+                else "ADD"
+            ),
+            "input_thresholds": input_thresholds,
+            "row_size": int(node_id.split('_')[-2].split('-')[-1])
+        }
 
     result_model = SegmentedModel(blocks, connections)
     assert result_model.func_eq(orig_model)
-    return result_model
+    return upload_info, result_model

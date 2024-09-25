@@ -77,7 +77,7 @@ class SegmentedModel:
         intermediate_results = {}
         node_ids = get_segment_ids(self.nodes.keys(), self.connections)
         for node_name in node_ids:
-            parent_result = get_parent_result(
+            _, parent_result = get_parent_result(
                 node_name, self.connections, intermediate_results,
                 default_func=lambda node_name: inp_dict[node_name]
             )
@@ -299,9 +299,9 @@ def get_segment_ids(node_names, connections=None):
             if outputs and node_name in all_layer_inputs:
                 continue
             d = depth + int(outputs)
-            segment_ids[node_name] = f"{d}_{group_id}_{row_id}_0"
+            segment_ids[node_name] = f"{d}_{group_id}_{row_id}-{len(node_names)}_0"
             for s in range(node_sizes.get(node_name, 0)):
-                segment_ids[(node_name, s + 1)] = f"{d}_{group_id}_{row_id}_{s + 1}"
+                segment_ids[(node_name, s + 1)] = f"{d}_{group_id}_{row_id}-{len(node_names)}_{s + 1}"
 
     while connections_list:
         # Find connections that do not use ouptuts of remaining connection
