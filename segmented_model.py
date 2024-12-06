@@ -29,6 +29,8 @@ class SegmentedModel:
         if connections is None:
             assert isinstance(nodes, keras.Model | SegmentedModel)
             nodes, connections = format_node_connections(nodes)
+        else:
+            assert isinstance(nodes, dict) and isinstance(connections, dict)
         self.nodes = nodes
         self.connections = connections
         self.last_intermediates = None
@@ -132,16 +134,24 @@ class SegmentedModel:
         new_connections = {}
         num_segments = {}
 
+        # Skip connections added to link split segments
+        conn_to_skip = {
+            (inputs, outputs) for inputs, outputs in connections            
+            if len(inputs) == 1 and len(outputs) == 1
+        }
+
         for node_name, layers in nodes.items():
             core_segment_name, prev_len = get_prev_len(node_name)
             if prev_len > 0 and core_segment_name in core_segment_lengths:
+                # Make a connection between node segments when multiple nodes
+                # based on the same core node are present (.extend a second time)
                 segment_name = get_node_name(node_name, prev_len - 1, 0)
                 conn_name = (
                     (segment_name,), (get_node_name(node_name, prev_len - 1, 1),)
                 )
                 new_connections[conn_name] = None
 
-            segment_sizes = splitter_dict[node_name](layers)
+            segment_sizes = splitter_dict.get(node_name, lambda l: [len(nodes[node_name])])(layers)
             segment_indices = [
                 (prev_sum := sum(segment_sizes[:i]), prev_sum + segment_sizes[i])
                 for i in range(len(segment_sizes))
@@ -155,12 +165,21 @@ class SegmentedModel:
                         (get_node_name(node_name, prev_len, i + 1),)
                     )
                     new_connections[conn_name] = None
+                elif len(segment_indices) == 1:
+                    # This node's connections should not be modified,
+                    # if it had a linking connection, add it back from conn_to_skip
+                    new_connections.update({
+                        conn: connections[conn] for conn in conn_to_skip
+                        if node_name in conn[0]
+                    })
             num_segments[node_name] = len(segment_indices)
+            # Keep track of the number of segments created to determine names for other segments
+            # the same core name (when extending a second time, .extend(...).extend(...))
             core_segment_lengths[core_segment_name].append(num_segments[node_name])
 
         for (inputs, outputs), merge_func in connections.items():
             # Skip connections added to link split segments
-            if len(inputs) == 1 and len(outputs) == 1:
+            if (inputs, outputs) in conn_to_skip:
                 continue
             new_inputs = tuple(
                 get_node_name(inp, 0, get_prev_len(inp)[1])
@@ -304,7 +323,7 @@ def get_segment_ids(node_names, connections=None):
                 segment_ids[(node_name, s + 1)] = f"{d}_{group_id}_{row_id}-{len(node_names)}_{s + 1}"
 
     while connections_list:
-        # Find connections that do not use ouptuts of remaining connection
+        # Find connections that do not use ouptuts of remaining connections
         found_parent = False
         group = []
         for i, (inputs, outputs) in enumerate(connections_list):

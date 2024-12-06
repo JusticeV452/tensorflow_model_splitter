@@ -175,6 +175,13 @@ class TestSegmentedModel(unittest.TestCase):
         self.assertEqual(len(nodes), len(ex_nodes))
         for node_name in nodes:
             self.assertIn(node_name, ex_nodes)
+    
+    def assertNodesStrictEqual(self, nodes, ex_nodes):
+        self.assertNodesEqual(nodes, ex_nodes)
+        for node_name in nodes:
+            self.assertEqual(len(nodes[node_name]), len(ex_nodes[node_name]))
+            for layer, ex_layer in zip(nodes[node_name], ex_nodes[node_name]):
+                self.assertIs(layer, ex_layer)
 
     def test_func_eq(self):
         inp_len = 3
@@ -279,8 +286,8 @@ class TestSegmentedModel(unittest.TestCase):
         single_extend = segmented.extend(1)
         self.assertConnectionsEqual(
             single_extend.connections,
-            {key: type(val) for key, val in segmented.connections.items()
-        })
+            {key: type(val) for key, val in segmented.connections.items()}
+        )
         self.assertNodesEqual(single_extend.nodes, segmented.nodes)
         self.assertTrue(single_extend.func_eq(segmented))
 
@@ -341,6 +348,131 @@ class TestSegmentedModel(unittest.TestCase):
         self.assertConnectionsEqual(multi_extended.connections, ex_connections)
         self.assertNodesEqual(multi_extended.nodes, node_names)
         self.assertTrue(single_extended.func_eq(multi_extended))
+        
+    def test_selective_then_single_extend(self):
+        model = multiinput_oneoutput(
+            [10, 10], hidden_size=30, out_size=1,
+            hidden_layers=4, activation="relu",
+            standalone_activations=False,
+            merge_func=add
+        )
+        inp1_name = model.layers[0].name
+        out_name = model.layers[11].name
+        segmented = segment_branching_model(model)
+        selective_extend = segmented.extend({inp1_name: 2, out_name: 3})
+        single_extend = selective_extend.extend(1)
+        self.assertConnectionsEqual(
+            single_extend.connections,
+            {key: type(val) for key, val in selective_extend.connections.items()}
+        )
+        self.assertNodesEqual(single_extend.nodes, selective_extend.nodes)
+        self.assertTrue(single_extend.func_eq(selective_extend))
+        
+    def test_selective_then_extend_1(self):
+        model = multiinput_oneoutput(
+            [10, 10], hidden_size=30, out_size=1,
+            hidden_layers=4, activation="relu",
+            standalone_activations=False,
+            merge_func=add
+        )
+        inp1_name = model.layers[0].name
+        inp2_name = model.layers[1].name
+        out_name = model.layers[11].name
+        segmented = segment_branching_model(model)
+        selective_extend_in2_out2 = segmented.extend({inp2_name: 2, out_name: 2})
+        multi_extend = selective_extend_in2_out2.extend(2)
+        ex = segmented.extend({inp1_name: 2, inp2_name: 4, out_name: 4})
+        self.assertConnectionsEqual(
+            multi_extend.connections,
+            {key: type(val) for key, val in ex.connections.items()}
+        )
+        self.assertNodesEqual(multi_extend.nodes, ex.nodes)
+        self.assertTrue(multi_extend.func_eq(ex))
+
+    def test_selective_then_extend_2(self):
+        model = multiinput_oneoutput(
+            [10, 10], hidden_size=30, out_size=1,
+            hidden_layers=4, activation="relu",
+            standalone_activations=False,
+            merge_func=add
+        )
+        inp1_name = model.layers[0].name
+        inp2_name = model.layers[1].name
+        out_name = model.layers[11].name
+        segmented = segment_branching_model(model)
+        selective_extend_in2_out2 = segmented.extend({inp1_name: 2, out_name: 2})
+        multi_selective_extend = selective_extend_in2_out2.extend({out_name: 2})
+        split_success = False
+        for i in range(2):
+            out_split_len = len(selective_extend_in2_out2.nodes[out_name]) // 2 + i
+            ex_nodes = {
+                inp1_name: segmented.nodes[inp1_name][:3],
+                (inp1_name, 1): segmented.nodes[inp1_name][3:],
+                inp2_name: segmented.nodes[inp2_name],
+                out_name: selective_extend_in2_out2.nodes[out_name][:out_split_len],
+                (out_name, 1): selective_extend_in2_out2.nodes[out_name][out_split_len:],
+                (out_name, 2): selective_extend_in2_out2.nodes[(out_name, 1)]
+            }
+            try:
+                self.assertNodesStrictEqual(multi_selective_extend.nodes, ex_nodes)
+                split_success = True
+                break
+            except:
+                pass
+        self.assertTrue(split_success)
+        ex_connections = {
+            ((inp1_name,), ((inp1_name, 1),)): None,
+            ((out_name,), ((out_name, 1),)): None,
+            (((out_name, 1),), ((out_name, 2),)): None,
+            (((inp1_name, 1), inp2_name), (out_name,)): keras.layers.Add
+        }
+        self.assertConnectionsEqual(
+            multi_selective_extend.connections, ex_connections
+        )
+        self.assertTrue(multi_selective_extend.func_eq(model))
+        
+    def test_selective_then_extend_3(self):
+        model = multiinput_oneoutput(
+            [10, 10], hidden_size=30, out_size=1,
+            hidden_layers=4, activation="tanh",
+            standalone_activations=False,
+            merge_func=concatenate
+        )
+        inp1_name = model.layers[0].name
+        inp2_name = model.layers[1].name
+        out_name = model.layers[11].name
+        segmented = segment_branching_model(model)
+        selective_extend_in2_out2 = segmented.extend({inp1_name: 2, out_name: 2})
+        multi_selective_extend = selective_extend_in2_out2.extend({(out_name, 1): 2})
+        split_success = False
+        # Allow both distributions for odd number of layers in node
+        for i in range(2):
+            out_split_len = len(selective_extend_in2_out2.nodes[(out_name, 1)]) // 2 + i
+            ex_nodes = {
+                inp1_name: segmented.nodes[inp1_name][:3],
+                (inp1_name, 1): segmented.nodes[inp1_name][3:],
+                inp2_name: segmented.nodes[inp2_name],
+                out_name: selective_extend_in2_out2.nodes[out_name],
+                (out_name, 1): selective_extend_in2_out2.nodes[(out_name, 1)][:out_split_len],
+                (out_name, 2): selective_extend_in2_out2.nodes[(out_name, 1)][out_split_len:]
+            }
+            try:
+                self.assertNodesStrictEqual(multi_selective_extend.nodes, ex_nodes)
+                split_success = True
+                break
+            except:
+                pass
+        self.assertTrue(split_success)
+        ex_connections = {
+            ((inp1_name,), ((inp1_name, 1),)): None,
+            ((out_name,), ((out_name, 1),)): None,
+            (((out_name, 1),), ((out_name, 2),)): None,
+            (((inp1_name, 1), inp2_name), (out_name,)): keras.layers.Concatenate
+        }
+        self.assertConnectionsEqual(
+            multi_selective_extend.connections, ex_connections
+        )
+        self.assertTrue(multi_selective_extend.func_eq(model))
 
 
 if __name__ == '__main__':

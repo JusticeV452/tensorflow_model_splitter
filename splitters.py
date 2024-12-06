@@ -9,7 +9,17 @@ from utils import (
     iter_layers, group_layers, model_wrap
 )
 
-def split_by_num_segments(num_segments: int, independent_activations=False):
+
+def num_layers_with_weights(layer_list, independent_activations=False):
+    return len([
+        layer for layer in layer_list
+        if not (is_input_layer(layer) or (not independent_activations and is_activation_layer(layer)))
+    ])
+
+
+def split_by_num_segments(
+        num_segments: int, independent_activations=False,
+        group_size_calc=None):
     """
     Create splitter for use in make_c_code function.
     Splitter will split model into `num_segments` equal segments of
@@ -28,7 +38,11 @@ def split_by_num_segments(num_segments: int, independent_activations=False):
         in each segment to split the model into.
 
     """
-
+    group_size_calc = (
+        (lambda l: num_layers_with_weights(l, independent_activations))
+        if group_size_calc is None else group_size_calc
+    )
+    
     def splitter(layers: list | tuple | keras.Model):
         if isinstance(layers, keras.Model):
             layers = list(iter_layers(layers))
@@ -37,8 +51,8 @@ def split_by_num_segments(num_segments: int, independent_activations=False):
             independent_activations=independent_activations
         )
         layers_per_segment = len(layers) / num_segments
-        smallest_group = min(grouped_layers, key=len)
-        assert layers_per_segment >= len(smallest_group), (
+        smallest_group = min(grouped_layers, key=group_size_calc)
+        assert layers_per_segment >= group_size_calc(smallest_group), (
             f"Not enough layers for {num_segments} segements when "
             f"smallest group is size {len(smallest_group)}"
         )
@@ -50,10 +64,10 @@ def split_by_num_segments(num_segments: int, independent_activations=False):
                 neighbors.append(sm_idx - 1)
             if sm_idx < len(grouped_layers) - 1:
                 neighbors.append(sm_idx + 1)
-            fuse_idx = min(neighbors, key=lambda i: len(grouped_layers[i]))
+            fuse_idx = min(neighbors, key=lambda i: group_size_calc(grouped_layers[i]))
             lower_idx, upper_idx = sorted([sm_idx, fuse_idx])
             grouped_layers[lower_idx].extend(grouped_layers.pop(upper_idx))
-            smallest_group = min(grouped_layers, key=len)
+            smallest_group = min(grouped_layers, key=group_size_calc)
 
         segments = [len(group) for group in grouped_layers]
         return segments
