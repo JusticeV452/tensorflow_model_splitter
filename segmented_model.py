@@ -318,10 +318,12 @@ def get_segment_ids(node_names, connections=None):
             if outputs and node_name in all_layer_inputs:
                 continue
             d = depth + int(outputs)
-            segment_ids[node_name] = f"{d}_{group_id}_{row_id}-{len(node_names)}_0"
-            for s in range(node_sizes.get(node_name, 0)):
-                segment_ids[(node_name, s + 1)] = f"{d}_{group_id}_{row_id}-{len(node_names)}_{s + 1}"
-
+            num_segments = node_sizes.get(node_name, 0) + 1
+            for s in range(num_segments):
+                key = (node_name, s) if s else node_name
+                r_id = row_id  # 0 if s < num_segments - 1 else row_id
+                row_size = len(node_names)  # 1 if s < num_segments - 1 else len(node_names)
+                segment_ids[key] = f"{d}_{group_id}_{r_id}-{row_size}_{s}-{num_segments}"
     while connections_list:
         # Find connections that do not use ouptuts of remaining connections
         found_parent = False
@@ -349,11 +351,10 @@ def get_segment_ids(node_names, connections=None):
         for i, (c, *_) in enumerate(group):
             connections_list.pop(c - i)
         depth += 1
-
     # Model has no branches
     if not segment_ids:
         for i, node_name in enumerate(node_names):
-            segment_ids[node_name] = f"0_0_0_{i}"
+            segment_ids[node_name] = f"0_0_0-1_{i}-{len(node_names)}"
     assert len(segment_ids) == len(node_names), (
         f"{len(segment_ids)} != {len(node_names)}"
     )
