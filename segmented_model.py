@@ -1,4 +1,5 @@
 import copy
+import keras
 import numpy as np
 import networkx as nx
 import tensorflow.keras as keras
@@ -48,7 +49,9 @@ def segmented_models_isomorphic(sm1, sm2):
 class SegmentedModel:
     def __init__(self, nodes, connections=None):
         if connections is None:
-            assert isinstance(nodes, keras.Model | SegmentedModel)
+            assert isinstance(nodes, keras.Model | SegmentedModel | str)
+            if isinstance(nodes, str):
+                nodes = keras.saving.load_model(nodes)
             nodes, connections = format_node_connections(nodes)
         else:
             assert isinstance(nodes, dict) and isinstance(connections, dict)
