@@ -164,7 +164,7 @@ def split_model(
     upload_info = {}
     saver_results = {}
     nodes, connections = model.extend(splitter)
-    node_ids = get_segment_ids(nodes.keys(), connections)
+    node_ids = [str(i) for i in range(len(nodes))]
 
     if saver:
         save_root = os.path.join(output_folder, save_name)
@@ -175,8 +175,11 @@ def split_model(
         segment = nodes[node_name]
         if isinstance(segment, list):
             segment = model_wrap(segment)
-        connection_key, parent_result = get_parent_result(node_name, connections, saver_results)
-        save_path, saver_results[node_name] = saver(
+        connection_key, parent_result = get_parent_result(
+            node_name, connections, saver_results,
+            merge_cast=lambda x: x.numpy()
+        )
+        save_path, (saver_inputs[node_name], saver_results[node_name]) = saver(
             segment, save_root, node_id, parent_result
         )
         blocks[node_name] = segment

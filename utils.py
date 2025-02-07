@@ -155,7 +155,7 @@ def get_connection_key(node_name, connections):
 
 def get_parent_result(
         node_name, connections, intermediate_results,
-        default_func=lambda node_name: None):
+        default_func=lambda node_name: None, merge_cast=lambda x: x.numpy()):
     connection_key = get_connection_key(node_name, connections)
     if connection_key:
         inputs, _ = connection_key
@@ -164,10 +164,12 @@ def get_parent_result(
             for parent_name in inputs
         ]
         merge_func = (
-            (lambda x: connections[connection_key](x).numpy())
+            (lambda x: connections[connection_key](x))
             if len(inputs) > 1 else lambda x: x[0]
         )
         combined_parent_result = merge_func(parent_results)
+        if callable(merge_cast):
+            combined_parent_result = merge_cast(combined_parent_result)
     else:
         combined_parent_result = default_func(node_name)
     return connection_key, combined_parent_result

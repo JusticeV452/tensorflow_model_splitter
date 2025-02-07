@@ -26,6 +26,20 @@ def format_node_connections(nodes, connections=None):
     return nodes, connections
 
 
+def sort_connections(connections):
+    connections = list(connections)
+
+    while connections:
+        for i, (inputs, outputs) in enumerate(connections):
+            # Check if all inputs are satisfied or have no dependencies
+            if all(
+                inp not in [out for _, output_list in connections for out in output_list]
+                for inp in inputs
+            ):
+                yield connections.pop(i)
+                break
+
+
 def segmented_model_to_graph(sm):
     G = nx.DiGraph()
     for (inputs, outputs), concat in sm.connections.items():
@@ -58,10 +72,27 @@ class SegmentedModel:
         self.nodes = nodes
         self.connections = connections
         self.last_intermediates = None
+        self.last_inputs = None
+        all_layer_inputs = set(
+            inp for inputs, _ in self.connections for inp in inputs
+        )
+        self._input_names = [
+            node_name for node_name in self.nodes
+            if "input" in node_name
+        ]
+        self._output_names = self._input_names if not self.connections else [
+            out for _, outputs in self.connections
+            for out in outputs
+            if out not in all_layer_inputs
+        ]
 
     @property
     def input_names(self):
-        return [node_name for node_name in self.nodes if "input" in node_name]
+        return self._input_names
+
+    @property
+    def output_names(self):
+        return self._output_names
 
     def __repr__(self):
         return repr(self.to_dict())
@@ -72,10 +103,39 @@ class SegmentedModel:
     def __iter__(self):
         return iter((self.nodes, self.connections))
 
+    def run_order(self):
+        yielded = set()
+        all_layer_inputs = set(
+            inp for inputs, _ in self.connections for inp in inputs
+        )
+        for inputs, outputs in sort_connections(self.connections):
+            for inp in inputs:
+                if inp in yielded:
+                    continue
+                yielded.add(inp)
+                yield inp
+            for out in outputs:
+                if out in all_layer_inputs:
+                    continue
+                yield out
+    def segments(self, ordered=True):
+        node_names = (
+            self.run_order()
+            if self.connections and ordered
+            else self.nodes
+        )
+        for node_name in node_names:
+            layers = self.nodes[node_name]
+            segment = model_wrap(layers) if isinstance(layers, list) else layers
+            yield node_name, segment
+
     def __eq__(self, other):
         if not isinstance(other, SegmentedModel):
             return False
-        return self.nodes == other.nodes and self.connections == other.connections
+        return (
+            self.nodes == other.nodes
+            and self.connections == other.connections
+        )
 
     def to_dict(self):
         return {"nodes": self.nodes, "connections": self.connections}
@@ -83,7 +143,7 @@ class SegmentedModel:
     def to_graph(self):
         return segmented_model_to_graph(self)
 
-    def make_input(self, input_gen=np.random.rand):
+    def make_input(self, input_gen=np.random.rand, batch_size=1):
         inps = []
         for inp_name in self.input_names:
             segment = self.nodes[inp_name]
@@ -91,10 +151,10 @@ class SegmentedModel:
                 segment[0].input if isinstance(segment, list)
                 else segment.input
             )
-            inps.append(input_gen(1, *keras_inp.shape[1:]))
+            inps.append(input_gen(batch_size, *keras_inp.shape[1:]))
         return inps
 
-    def __call__(self, *inps):
+    def __call__(self, *inps, merge_cast=lambda x: x.numpy()):
         if len(inps) == 1 and isinstance(inps[0], list | tuple | dict):
             inps = inps[0]
         inp_dict = inps
@@ -104,18 +164,23 @@ class SegmentedModel:
                 for layer_name, arr in zip(self.input_names, inps)
             }
         intermediate_results = {}
-        node_ids = get_segment_ids(self.nodes.keys(), self.connections)
-        for node_name in node_ids:
+        self.last_inputs = {}
+        for node_name, segment in self.segments():
             _, parent_result = get_parent_result(
                 node_name, self.connections, intermediate_results,
-                default_func=lambda node_name: inp_dict[node_name]
+                default_func=lambda node_name: inp_dict[node_name],
+                merge_cast=merge_cast
             )
-            segment = self.nodes[node_name]
-            if isinstance(segment, list):
-                segment = model_wrap(segment)
+            self.last_inputs[node_name] = parent_result
             intermediate_results[node_name] = segment(parent_result)
         self.last_intermediates = intermediate_results
-        return intermediate_results[node_name]
+        outputs = [
+            intermediate_results[node_name]
+            for node_name in self.output_names
+        ]
+        if len(self.output_names) == 1:
+            outputs = outputs[0]
+        return outputs
 
     def func_eq(self, other):
         if not isinstance(other, keras.Model | SegmentedModel):
@@ -296,108 +361,16 @@ def segment_branching_model(model: keras.Model):
     )
 
 
-def get_segment_ids(node_names, connections=None):
-    """
-    
-
-    Parameters
-    ----------
-    node_names : TYPE
-        DESCRIPTION.
-    connections : TYPE
-        DESCRIPTION.
-
-    Returns
-    -------
-    segment_ids : TYPE
-        DESCRIPTION.
-
-    """
-    if connections is None:
-        node_names, connections = format_node_connections(node_names)
-    if isinstance(node_names, dict):
-        node_names = node_names.keys()
-
-    segment_ids = {}
-
-    # Create connections list and get unsegmented node sizes
-    node_sizes = {}
-    connections_list = []
-    for conn in connections:
-        inputs, outputs = conn
-        # Skip connections linking segments in the same block
-        if len(inputs) == 1 and len(outputs) == 1:
-            group_name, _ = (
-                (inputs[0], 0) if isinstance(inputs[0], str) else inputs[0]
-            )
-            node_sizes.setdefault(group_name, 0)
-            node_sizes[group_name] += 1
-            continue
-        inputs = tuple(
-            inp[0] if isinstance(inp, list | tuple)
-            else inp for inp in inputs
-        )
-        connections_list.append((inputs, outputs))
-
-    all_layer_inputs = set(
-        inp for inputs, _ in connections_list for inp in inputs
-    )
-
-    depth = 0
-    group_id = 0
-    def update_segment_ids(node_names, outputs=False):
-        for row_id, node_name in enumerate(node_names):
-            if outputs and node_name in all_layer_inputs:
-                continue
-            d = depth + int(outputs)
-            num_segments = node_sizes.get(node_name, 0) + 1
-            for s in range(num_segments):
-                key = (node_name, s) if s else node_name
-                r_id = row_id  # 0 if s < num_segments - 1 else row_id
-                row_size = len(node_names)  # 1 if s < num_segments - 1 else len(node_names)
-                segment_ids[key] = f"{d}_{group_id}_{r_id}-{row_size}_{s}-{num_segments}"
-    while connections_list:
-        # Find connections that do not use ouptuts of remaining connections
-        found_parent = False
-        group = []
-        for i, (inputs, outputs) in enumerate(connections_list):
-            found_parent = False
-            for j, (_, other_outputs) in enumerate(connections_list):
-                if j == i:
-                    continue
-                # Check if connection's inputs contains a segment name that
-                # is an output of any remaining connections
-                if any(inp in set(other_outputs) for inp in inputs):
-                    found_parent = True
-                    break
-            # If connection is a child of another connection check next connection
-            if found_parent:
-                continue
-            group.append((i, inputs, outputs))
-
-        for c, inputs, outputs in group:
-            update_segment_ids(inputs)
-            update_segment_ids(outputs, outputs=True)
-            group_id += 1
-
-        for i, (c, *_) in enumerate(group):
-            connections_list.pop(c - i)
-        depth += 1
-    # Model has no branches
-    if not segment_ids:
-        for i, node_name in enumerate(node_names):
-            segment_ids[node_name] = f"0_0_0-1_{i}-{len(node_names)}"
-    assert len(segment_ids) == len(node_names), (
-        f"{len(segment_ids)} != {len(node_names)}"
-    )
-    return segment_ids
-
-
 def check_segment_split(model, segments_dict, connections, inps=None):
     inp_list = get_input_list(model)
     if type(inps) is type(None):
         inps = [np.random.rand(1, *layer.shape[1:]) for layer in inp_list]
-    expected = model(inps).numpy()
+    expected = model(inps)
     inp_dict = {layer.name: arr for layer, arr in zip(inp_list, inps)}
     pred = SegmentedModel(segments_dict, connections)(inp_dict)
+    if type(expected) is list:
+        assert type(pred) is list and len(pred) == len(expected)
+        for p, ex in zip(pred, expected):
+            assert np.array_equal(p, ex)
+        return
     assert np.array_equal(pred, expected)
