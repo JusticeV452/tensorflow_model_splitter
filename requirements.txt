@@ -1,5 +1,6 @@
 inquirer
 matplotlib
+pydot
 pyduinocli
 scikit-learn
 tensorflow==2.14.0
