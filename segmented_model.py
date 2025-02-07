@@ -1,5 +1,6 @@
 import copy
 import numpy as np
+import networkx as nx
 import tensorflow.keras as keras
 
 from nnom.scripts.nnom_utils import is_input_layer, get_input_list
@@ -22,6 +23,26 @@ def format_node_connections(nodes, connections=None):
         connections = copy.deepcopy(nodes.connections)
         nodes = copy.deepcopy(nodes.nodes)
     return nodes, connections
+
+
+def segmented_model_to_graph(sm):
+    G = nx.DiGraph()
+    for (inputs, outputs), concat in sm.connections.items():
+        concat_name = "(None)" if concat is None else concat.__class__.__name__
+        for inp in inputs:
+            for out in outputs:
+                G.add_edge(inp, out, concat=concat_name)
+                # G.add_node(inp, label=inp)
+                # G.add_node(out, label=out)
+    return G
+
+
+def segmented_models_isomorphic(sm1, sm2):
+    return nx.algorithms.isomorphism.DiGraphMatcher(
+        segmented_model_to_graph(sm1),
+        segmented_model_to_graph(sm2),
+        edge_match=lambda e1, e2: e1["concat"] == e2["concat"]
+    ).is_isomorphic()
 
 
 class SegmentedModel:
@@ -55,6 +76,9 @@ class SegmentedModel:
 
     def to_dict(self):
         return {"nodes": self.nodes, "connections": self.connections}
+    
+    def to_graph(self):
+        return segmented_model_to_graph(self)
 
     def make_input(self, input_gen=np.random.rand):
         inps = []
@@ -103,6 +127,11 @@ class SegmentedModel:
         except:
             return False
         return True
+    
+    def struct_eq(self, other):
+        if not isinstance(other, SegmentedModel):
+            return False
+        return segmented_models_isomorphic(self, other)
 
     def extend(self, splitter):
         nodes, connections = self
