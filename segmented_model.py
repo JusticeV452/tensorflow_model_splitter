@@ -291,24 +291,27 @@ def segment_branching_model(model: keras.Model):
     connections = {}
     seen = set()
 
+    search_failed_on = None
     def find_block_by_tail(tail_name):
+        nonlocal search_failed_on
         for block in blocks:
             if tail_name == block[-1].name:
                 return block
+        search_failed_on = tail_name
         return None
 
-    def add_to_parent_blocks(layer, inputs):
-        for inp in inputs:
-            input_name = get_prev_layer(inp).name
-            target_block = find_block_by_tail(input_name)
-            assert target_block
-            target_block.append(layer)
+    def add_to_parent_block(layer, inp):
+        input_name = get_prev_layer(inp).name
+        target_block = find_block_by_tail(input_name)
+        assert target_block
+        target_block.append(layer)
 
     all_model_layers = list(iter_layers(model))
-
     for i, layer in enumerate(all_model_layers):
         if addr(layer) in seen:
             continue
+        # print(layer.name)
+        seen.add(addr(layer))
         if is_input_layer(layer):
             blocks.append([layer])
             continue
@@ -316,6 +319,7 @@ def segment_branching_model(model: keras.Model):
         outputs = layer.output
         single_input = len(inputs) == 1
         children = []
+        # Check if other layers use this layer as an input
         for other_layer in all_model_layers[i + 1:]:
             input_names = [l.name.split('/')[0] for l in get_input_list(other_layer)]
             if layer.name in input_names:
@@ -324,8 +328,7 @@ def segment_branching_model(model: keras.Model):
 
         ## Extend existsing block
         if single_input and single_output:
-            add_to_parent_blocks(layer, inputs)
-            seen.add(addr(layer))
+            add_to_parent_block(layer, inputs[0])
             continue
 
         ## Create node and new blocks for each output
@@ -335,8 +338,16 @@ def segment_branching_model(model: keras.Model):
                 for inp in inputs
             )
         except TypeError as e:
+            print("Tried to find:", search_failed_on)
+            print("blocks:")
+            pp.pprint({block[0].name: [layer.name for layer in block] for block in blocks})
+            print("connections:")
+            pp.pprint(connections)
             print("Inputs to layers accepting multiple inputs must be the output of a block.")
             raise e
+        if single_input:
+            add_to_parent_block(layer, inputs[0])
+
         node_output_names = []
         # Search remaining layers for layers that use one of current layer's output as input
         for search_layer in all_model_layers[i + 1:]:
@@ -351,11 +362,10 @@ def segment_branching_model(model: keras.Model):
             blocks.append([block_start_layer])
             seen.add(addr(block_start_layer))
 
+        if not node_output_names:
+            continue
         node_name = (node_input_names, tuple(node_output_names))
         connections[node_name] = None if getattr(layer, "weights", []) else layer
-        if single_input:
-            add_to_parent_blocks(layer, inputs)
-        seen.add(addr(layer))
     return SegmentedModel(
         {block[0].name: block for block in blocks}, connections
     )
