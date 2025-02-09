@@ -9,7 +9,7 @@ import tensorflow.keras as keras
 from tinymlgen import port as get_c_code
 
 from utils import iter_layers, get_parent_result, model_wrap
-from nnom_utils import is_input_layer, generate_model
+from nnom.scripts.nnom_utils import is_input_layer, generate_model
 
 from segmented_model import get_segment_ids, SegmentedModel
 
