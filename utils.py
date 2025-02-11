@@ -1,6 +1,8 @@
+import os
+import json
 import warnings
+
 import numpy as np
-import tensorflow as tf
 import tensorflow.keras as keras
 
 from tensorflow.keras import layers as kl
@@ -8,6 +10,29 @@ from nnom.scripts.nnom_utils import is_input_layer
 
 SIZE_UNITS = ['B', "KB", "MB", "GB", "TB"]
 KiB = 1024
+
+
+def prod(arr):
+    result = 1
+    for el in arr:
+        result *= el
+    return result
+
+
+def identity_func(x):
+    return x
+
+
+def load_json(file_path, binary=False, encoding="utf-8", default=lambda: {}):
+    if not os.path.exists(file_path):
+        return default()
+    with open(file_path, f"r{'b' if binary else ''}", encoding=encoding) as file:
+        return json.load(file)
+
+
+def save_json(obj, file_path, binary=False, encoding="utf-8"):
+    with open(file_path, f"w{'b' if binary else ''}+", encoding=encoding) as file:
+        json.dump(obj, file)
 
 
 def is_activation_layer(layer: kl.Layer):

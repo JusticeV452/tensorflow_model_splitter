@@ -6,8 +6,12 @@ import networkx as nx
 import tensorflow.keras as keras
 
 from nnom.scripts.nnom_utils import is_input_layer, get_input_list
+from model_splitter import get_nnom_saver
 from splitters import split_by_num_segments
-from utils import iter_layers, get_parent_result, model_wrap
+from utils import (
+    iter_layers, get_parent_result, prod,
+    model_wrap, get_connection_key
+)
 
 
 def addr(obj: object):
@@ -31,7 +35,7 @@ def sort_connections(connections):
     connections = list(connections)
 
     while connections:
-        for i, (inputs, outputs) in enumerate(connections):
+        for i, (inputs, _) in enumerate(connections):
             # Check if all inputs are satisfied or have no dependencies
             if all(
                 inp not in [out for _, output_list in connections for out in output_list]
@@ -119,6 +123,21 @@ class SegmentedModel:
                 if out in all_layer_inputs:
                     continue
                 yield out
+
+    def get_input_thresholds(self):
+        thresh_dict = {}
+        for inputs, outputs in self.connections:
+            for out in outputs:
+                input_sizes = [
+                    prod(self.nodes[inp][-1].output.shape[1:])
+                    for inp in inputs
+                ]
+                thresh_dict[out] = [
+                    sum(input_sizes[:i + 1])
+                    for i in range(len(input_sizes))
+                ]
+        return thresh_dict
+
     def segments(self, ordered=True):
         node_names = (
             self.run_order()
@@ -140,7 +159,7 @@ class SegmentedModel:
 
     def to_dict(self):
         return {"nodes": self.nodes, "connections": self.connections}
-    
+
     def to_graph(self):
         return segmented_model_to_graph(self)
 
@@ -196,11 +215,73 @@ class SegmentedModel:
         except:
             return False
         return True
-    
+
     def struct_eq(self, other):
         if not isinstance(other, SegmentedModel):
             return False
         return segmented_models_isomorphic(self, other)
+
+    def save(self, saver="", x_test=None, calibrate_size=1000):
+        if isinstance(saver, str):
+            saver = get_nnom_saver(saver)
+        upload_info = {}
+        # Generate intermediate results
+        if callable(x_test):
+            x_test = self.make_input(input_gen=x_test)
+        elif isinstance(x_test, type(None)):
+            x_test = self.make_input(batch_size=calibrate_size)
+
+        # Populate model intermediate inputs
+        self(x_test)
+
+        # Make output shapes and id assignments
+        out_shapes = {}
+        node_outputs = {}
+        node_name_to_id = {}
+        for node_id, (node_name, segment) in enumerate(self.segments()):
+            out_shapes[node_name] = segment.output.shape[1:]
+            node_name_to_id[node_name] = node_id
+            connection = get_connection_key(node_name, self.connections)
+            if not connection:
+                continue
+            inputs, _ = connection
+            for inp in inputs:
+                node_outputs.setdefault(inp, [])
+                node_outputs[inp].append(node_name)
+
+        input_thresholds = self.get_input_thresholds()
+        for node_name, segment in self.segments():
+            connection = get_connection_key(node_name, self.connections)
+            node_id = node_name_to_id[node_name]
+            merge_func = self.connections.get(connection, None)
+            saved_at_path, weights = saver(node_id, segment, self.last_inputs[node_name])
+            inputs = connection[0] if connection else []
+            outputs = node_outputs.get(node_name, [])
+            out_device_name = outputs[0] if outputs else ""
+            upload_info[node_name] = {
+                "node_id": node_id,
+                "saved_at_path": saved_at_path,
+                "weights": weights,
+                "reduce_type": (
+                    "MULT"
+                    if "merging.multiply" in str(type(merge_func))
+                    else "ADD"
+                ),
+                "input_thresholds": input_thresholds.get(node_name, []),
+                "receive_order": (
+                    [node_name_to_id[inp] for inp in inputs]
+                ),
+                "receive_buffer_size": max([
+                    prod(out_shapes[inp]) for inp in inputs
+                ], default=1),
+                "send_buffer_size": prod(segment.output.shape[1:]) if out_device_name else 1,
+                "out_device": (
+                    str(node_name_to_id[out_device_name])
+                    if out_device_name and out_device_name != node_name
+                    else "NULL_ID"
+                )
+            }
+        return upload_info
 
     def extend(self, splitter):
         nodes, connections = self
@@ -374,13 +455,13 @@ def segment_branching_model(model: keras.Model):
 
 def check_segment_split(model, segments_dict, connections, inps=None):
     inp_list = get_input_list(model)
-    if type(inps) is type(None):
+    if isinstance(inps, type(None)):
         inps = [np.random.rand(1, *layer.shape[1:]) for layer in inp_list]
     expected = model(inps)
     inp_dict = {layer.name: arr for layer, arr in zip(inp_list, inps)}
     pred = SegmentedModel(segments_dict, connections)(inp_dict)
-    if type(expected) is list:
-        assert type(pred) is list and len(pred) == len(expected)
+    if isinstance(expected, list):
+        assert isinstance(pred, list) and len(pred) == len(expected)
         for p, ex in zip(pred, expected):
             assert np.array_equal(p, ex)
         return
