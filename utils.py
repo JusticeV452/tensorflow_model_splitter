@@ -200,6 +200,14 @@ def get_parent_result(
     return connection_key, combined_parent_result
 
 
+def set_model_weights(model, weights_dict):
+    for layer in model.layers:
+        if is_input_layer(layer) or layer.name not in weights_dict:
+            continue
+        layer.set_weights(weights_dict[layer.name])
+    return model
+
+
 def model_wrap(layers: list | tuple, suppress_warnings=False):
     """
     Wrap tf.Modules in keras.Model for saving with tinymlgen.port or
@@ -268,10 +276,7 @@ def model_wrap(layers: list | tuple, suppress_warnings=False):
 
     # Copy weights from original layers to new model
     weights_dict = {layer.name: layer.get_weights() for layer in layers}
-    for layer in model.layers:
-        if is_input_layer(layer) or layer.name not in weights_dict:
-            continue
-        layer.set_weights(weights_dict[layer.name])
+    model = set_model_weights(model, weights_dict)
 
     return model
 
