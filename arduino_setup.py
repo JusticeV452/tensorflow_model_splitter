@@ -13,7 +13,7 @@ import importlib.util
 from device_assignment import automatic_device_assigment, arduino_compile
 
 NNOM_DIR = "nnom"
-DEFAULT_PROJECT_PATH = "SETML_Arduino"
+DEFAULT_PROJECT_PATH = "template_project"
 INO_TEMPLATE_PATH = "arduino_template.ino"
 CONFIG_PATH = "config.json"
 CRC8_DEF_PATTERN = r"[a-zA-Z_\d]+ crc8\(.*?, .*?\) {"
