@@ -1,20 +1,22 @@
 import os
+import re
 import sys
 import ast
 import json
+import keras
 import shutil
 import argparse
 import inquirer
 import pyduinocli
 import importlib.util
 
-from model_splitter import split_model, save_nnom_model, DEFAULT_OUTPUT_FOLDER
+from device_assignment import automatic_device_assigment, arduino_compile
 
 NNOM_DIR = "nnom"
 DEFAULT_PROJECT_PATH = "SETML_Arduino"
 INO_TEMPLATE_PATH = "arduino_template.ino"
 CONFIG_PATH = "config.json"
-DEVICE_NAME_DEFS = {"0x0483-0x374b": "STM32C0116_DK"}
+CRC8_DEF_PATTERN = r"[a-zA-Z_\d]+ crc8\(.*?, .*?\) {"
 
 
 def load_json(file_path, binary=False, encoding="utf-8", default=lambda: {}):
@@ -66,7 +68,11 @@ def find_board(boards, _allow_missing=False, **kwargs):
         raise Exception(f"No board found with {attr_str}")
 
 
-def load_py_file(module_name, python_file_path):
+def load_py_file(python_file_path, module_name=None):
+    module_name = (
+        os.path.split(python_file_path)[-1].split('.')[0]
+        if module_name is None else module_name
+    )
     spec = importlib.util.spec_from_file_location(
         module_name, python_file_path
     )
@@ -76,8 +82,16 @@ def load_py_file(module_name, python_file_path):
     return module
 
 
+def get_text_input(prompt, var_name="request", path_type=None):
+    inquirer_class = inquirer.Path if path_type else inquirer.Text
+    kwargs = {"message": prompt}
+    if path_type:
+        kwargs["path_type"] = path_type
+    return inquirer.prompt([inquirer_class(var_name, **kwargs)])[var_name]
+
+
 def get_model(python_file_path, model_creator_func, *args, **kwargs):
-    model_gen_lib = load_py_file("model_gen", python_file_path)
+    model_gen_lib = load_py_file(python_file_path)
     model_gen_func = getattr(model_gen_lib, model_creator_func)
     return model_gen_func(*args, **kwargs)
 
@@ -88,17 +102,12 @@ if __name__ == "__main__":
         description='Splits a model into parts based on the number of devices selected'
     )
     parser.add_argument('-ppth', '--project_path', type=str, default=DEFAULT_PROJECT_PATH)
-    parser.add_argument('-m', '--module_path', type=str, default="models.py")
+    parser.add_argument('-m', '--model_path', type=str)
+    parser.add_argument('-md', '--module_path', type=str, default="models.py")
     parser.add_argument('-g', '--gen_func_name', type=str, default="create_model")
     parser.add_argument('-garg', '--gen_func_kwargs', type=str, nargs='*', default=[])
     parser.add_argument('-mn', '--model_name', type=str)
     parser.add_argument('-w', '--weights_path', type=str)
-
-    parser.add_argument('-pid', '--primary_id', type=int)
-    parser.add_argument('-sid', '--secondary_id', type=int, default=0)
-    parser.add_argument('-rid', '--root_id', type=int, default=0)
-    parser.add_argument('-tid', '--tail_id', type=int)
-    parser.add_argument('-sd', '--start_device', type=int, default=0)
     parser.add_argument('-p', '--ports', type=str, nargs='*')
     args = parser.parse_args()
 
@@ -119,7 +128,6 @@ if __name__ == "__main__":
             dirs_exist_ok=True
         )
     _, project_name = os.path.split(project_path)
-    ino_path = os.path.join(project_path, f"{project_name}.ino")
 
     config = load_json(CONFIG_PATH)
     cli_path = config.get("cli_path", "arduino-cli")
@@ -146,96 +154,123 @@ if __name__ == "__main__":
 
     # Validate board fqbns
     temp_fqbns = {}
+    board_details = {}
     for board in target_boards:
-        if board.get("fqbn"):
-            continue
-
-        board["fqbn"] = config.get("fqbns", {}).get(
-            board["save_key"], temp_fqbns.get(board["save_key"])
-        )
-
-        if board.get("fqbn"):
-            continue
-        board["fqbn"] = inquirer.prompt([inquirer.Text(
-            "fqbn",
-            message=f"No FQBN found for {board['display_name']}. Please enter FQBN"
-        )])["fqbn"]
+        fqbn = board.get("fqbn")
+        if not fqbn:
+            fqbn = config.get("fqbns", {}).get(
+                board["save_key"], temp_fqbns.get(board["save_key"])
+            )
+        if not fqbn:
+            fqbn = get_text_input(
+                f"No FQBN found for {board['display_name']}. Please enter FQBN"
+            )
+        board["fqbn"] = fqbn
         temp_fqbns[board["save_key"]] = board["fqbn"]
+        if fqbn not in board_details:
+            board_details[fqbn] = arduino.board.details(fqbn)["result"]
+        fqbn_config_options = board_details[fqbn].get("config_options")
+        for option in fqbn_config_options:
+            if "part number" not in option["option_label"]:
+                continue
+            pnum_options = {
+                part_entry["value_label"]: part_entry["value"]
+                for part_entry in option["values"]
+            }
+            selected_part = inquirer.prompt([inquirer.List(
+                "pnum",
+                message=f"Select a board part number for {board['display_name']}",
+                choices=pnum_options
+            )])["pnum"]
+            board.setdefault("options", {})
+            board["options"][option["option"]] = pnum_options[selected_part]
+            break
+        board["name"] = board.get("options", {}).get(
+            "pnum", board.get("name", board_details[board["fqbn"]]["name"].replace(' ', '_'))
+        )
+        firmware_path = f"devices/{board['name']}/firmware.h"
+        while not os.path.exists(firmware_path):
+            firmware_path = get_text_input(
+                f"No firmware.h found for {board['name']} at {firmware_path}. Please provide a path",
+                path_type=inquirer.Path.FILE
+            )
+        board["firmware_path"] = firmware_path
+
+    # Select global macros (macros for all boards)
+    sending_choices = {
+        "Default - Only available device interaction is sending": [],
+        "Enable pings - Enable sending pings between devices": ["ENABLE_PING"],
+        "Enable hold requests - Devices can request that senders stop sending": ["ENABLE_HOLD"]
+    }
+    sending_macros = sending_choices[inquirer.prompt([inquirer.List(
+        "sending_macros",
+        message="Select device sending capabilities",
+        choices=sending_choices
+    )])["sending_macros"]]
+
+    # Macro select
+    for board in target_boards:
+        macro_choices = [
+            "STATIC_SLOT_ASSIGN",
+            "UPDATE_ON_END",
+            "DEBUG_PRINT",
+            "HARDWARE_CRC",
+            "SLOT_MALLOC",
+            "TRACK_STATS",
+            "TRACK_SEND_STATS",
+            "TRACK_INTERLEAVING"
+        ]
+        default_macros = [
+            "STATIC_SLOT_ASSIGN",
+            "UPDATE_ON_END",
+            "DEBUG_PRINT"
+        ]
+        with open(board["firmware_path"], 'r', encoding="utf-8") as f:
+            firmware_content = f.read()
+        if re.findall(CRC8_DEF_PATTERN, firmware_content):
+            default_macros.append("HARDWARE_CRC")
+        board["optional_macros"] = sending_macros + inquirer.prompt([inquirer.Checkbox(
+            "macros",
+            message=f"Select macros to use for {board['display_name']}",
+            choices=macro_choices, default=default_macros
+        )])["macros"]
 
     # Make model args: python file, func that returns model, model_weights
-    gen_func_kwargs = {}
-    for arg_val_pair in args.gen_func_kwargs:
-        arg_name, val = arg_val_pair.split('=', 1)
-        gen_func_kwargs[arg_name] = ast.literal_eval(val)
+    if isinstance(args.model_path, str) and os.path.exists(args.model_path):
+        model = keras.saving.load_model(args.model_path)
+    else:
+        gen_func_kwargs = {}
+        for arg_val_pair in args.gen_func_kwargs:
+            arg_name, val = arg_val_pair.split('=', 1)
+            gen_func_kwargs[arg_name] = ast.literal_eval(val)
 
-    model = get_model(args.module_path, args.gen_func_name, **gen_func_kwargs)
-    if args.weights_path:
-        model.load_weights(args.weights_path)
+        model = get_model(
+            args.module_path, args.gen_func_name, **gen_func_kwargs
+        )
+        if args.weights_path:
+            model.load_weights(args.weights_path)
 
     # Split model with nnom
-    num_segements = len(target_boards) if not args.tail_id else args.tail_id + 1
-    upload_info, _ = split_model(
-        model, num_segements,
-        saver=save_nnom_model, save_name=args.model_name
-    )
+    board_pairs = automatic_device_assigment(model, target_boards)[0]
 
     # copy each weight set into project dir and run
-    for i, board in enumerate(target_boards):
-        device_id = args.root_id + args.start_device + i
-        weights_path = os.path.join(
-            DEFAULT_OUTPUT_FOLDER,
-            model.name, "nnom",
-            f"{model.name}_{device_id}.h"
+    for i, (board, device_config) in enumerate(board_pairs):
+        board_name = board["name"]
+        temp_dir, compile_result = arduino_compile(
+            board, device_config, project_path, keep_tempdir=True
         )
-        weights_dest_path = os.path.join(project_path, "weights.h")
-        print(weights_path, "->", weights_dest_path)
-        shutil.copy(weights_path, weights_dest_path)
-
-        # Update variables in ino file
-        shutil.copy(INO_TEMPLATE_PATH, ino_path)
-        with open(ino_path, 'r+', encoding="utf-8") as file:
-            content = file.read()
-            tail_id = len(target_boards) - 1 if args.tail_id is None else args.tail_id
-            device_name_def = config.get("device_names", {}).get(
-                board["save_key"], DEVICE_NAME_DEFS.get(board["save_key"], "")
-            )
-            content = content.replace(
-                "{{DEVICE_NAME_DEF}}",
-                "" if not device_name_def else f"#define {device_name_def}"
-            ).replace(
-                "{{REDUCE_TYPE}}", f"#define {upload_info['reduce_type']}_REDUCE"
-            ).replace(
-                "{{PRIMARY_ID}}", str(args.pid)
-            ).replace(
-                "{{SECONDARY_ID}}", str(args.sid)
-            ).replace(
-                "{{ROOT_ID}}", str(tail_id)
-            ).replace(
-                "{{TAIL_ID}}", str(tail_id)
-            ).replace(
-                "{{NUM_THRESHOLDS}}", str(len(upload_info["input_thresholds"]))
-            ).replace(
-                "{{INPUT_THRESHOLDS}}", '{' + str(upload_info["input_thresholds"])[1:-1] + '}'
-            ).replace(
-                "{{ROW_SIZE}}", str(upload_info["row_size"])
-            )
-        with open(ino_path, 'w+', encoding="utf-8") as file:
-            file.write(content)
-
-        try:
-            arduino.compile(project_path, fqbn=board.get("fqbn"))
-        except pyduinocli.errors.arduinoerror.ArduinoError as arduino_error:
-            error_vars = vars(arduino_error)
-            error_str = json.loads(error_vars["result"]["__stdout"])["compiler_err"]
-            print(error_str)
-            sys.exit(1)
 
         # arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:samd:mkr1000 MyFirstSketch
         print(board["address"])
-        arduino.upload(project_path, port=board["address"], fqbn=board.get("fqbn"))
+        uploader_path = f"devices/{board_name}/uploader.py"
+        if os.path.exists(uploader_path):
+            load_py_file(uploader_path).upload(temp_dir.name, board, compile_result)
+        else:
+            arduino.upload(temp_dir.name, port=board["address"], fqbn=board.get("fqbn"))
+        temp_dir.cleanup()
 
         # If successful, save config
         config["fqbns"][board["save_key"]] = board["fqbn"]
-        if device_name_def:
-            config["device_names"][board["save_key"]] = device_name_def
+        # if device_name_def:
+        #     config["device_names"][board["save_key"]] = device_name_def
         save_json(config, CONFIG_PATH)

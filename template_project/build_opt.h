@@ -1,0 +1,2 @@
+-fsingle-precision-constant
+

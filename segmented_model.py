@@ -6,7 +6,7 @@ import networkx as nx
 import tensorflow.keras as keras
 
 from nnom.scripts.nnom_utils import is_input_layer, get_input_list
-from model_splitter import get_nnom_saver
+from savers import get_nnom_saver
 from splitters import split_by_num_segments
 from utils import (
     iter_layers, get_parent_result, prod,
@@ -52,8 +52,6 @@ def segmented_model_to_graph(sm):
         for inp in inputs:
             for out in outputs:
                 G.add_edge(inp, out, concat=concat_name)
-                # G.add_node(inp, label=inp)
-                # G.add_node(out, label=out)
     return G
 
 

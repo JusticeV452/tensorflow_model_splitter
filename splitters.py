@@ -1,25 +1,28 @@
-import numpy as np
+from typing import Callable
+
 import tensorflow.keras as keras
-
 from tensorflow.keras import layers as kl
-from nnom.scripts.nnom_utils import is_input_layer
 
+from nnom.scripts.nnom_utils import is_input_layer
 from utils import (
     clone_layer, calc_model_size,
-    iter_layers, group_layers, model_wrap
+    iter_layers, group_layers, model_wrap, is_activation_layer
 )
 
 
 def num_layers_with_weights(layer_list, independent_activations=False):
     return len([
         layer for layer in layer_list
-        if not (is_input_layer(layer) or (not independent_activations and is_activation_layer(layer)))
+        if not (
+            is_input_layer(layer)
+            or (not independent_activations and is_activation_layer(layer))
+        )
     ])
 
 
 def split_by_num_segments(
         num_segments: int, independent_activations=False,
-        group_size_calc=None):
+        group_size_calc=None) -> Callable:
     """
     Create splitter for use in make_c_code function.
     Splitter will split model into `num_segments` equal segments of
@@ -42,7 +45,7 @@ def split_by_num_segments(
         (lambda l: num_layers_with_weights(l, independent_activations))
         if group_size_calc is None else group_size_calc
     )
-    
+
     def splitter(layers: list | tuple | keras.Model):
         if isinstance(layers, keras.Model):
             layers = list(iter_layers(layers))
